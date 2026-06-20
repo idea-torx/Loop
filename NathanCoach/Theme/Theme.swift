@@ -3,11 +3,11 @@ import SwiftUI
 // MARK: - Design tokens
 
 enum CoachTheme {
-    // Orange monochrome ramp (hue ~22–30°)
-    static let ember = Color(red: 1.00, green: 0.42, blue: 0.10)   // primary accent  #FF6A1A
-    static let flame = Color(red: 1.00, green: 0.56, blue: 0.26)   // bright highlight
-    static let rust  = Color(red: 0.72, green: 0.26, blue: 0.06)   // deep shade
-    static let glow  = Color(red: 1.00, green: 0.42, blue: 0.10).opacity(0.16) // soft fill tint
+    // Blood-orange monochrome ramp (Strava-inspired, red-leaning ~12–16°)
+    static let ember = Color(red: 0.91, green: 0.26, blue: 0.07)   // primary accent  ~#E84212
+    static let flame = Color(red: 1.00, green: 0.36, blue: 0.16)   // highlight (still red-orange, not amber)
+    static let rust  = Color(red: 0.58, green: 0.15, blue: 0.05)   // deep shade
+    static let glow  = Color(red: 0.91, green: 0.26, blue: 0.07).opacity(0.16) // soft fill tint
 
     // Single accent entry point
     static let accent = ember
@@ -62,9 +62,9 @@ enum CoachTheme {
     static var background: LinearGradient {
         LinearGradient(
             colors: [
-                Color(red: 0.07, green: 0.04, blue: 0.025),
-                Color(red: 0.10, green: 0.05, blue: 0.02),
-                Color(red: 0.03, green: 0.02, blue: 0.015)
+                Color(red: 0.08, green: 0.035, blue: 0.030),
+                Color(red: 0.11, green: 0.040, blue: 0.035),
+                Color(red: 0.03, green: 0.015, blue: 0.015)
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
