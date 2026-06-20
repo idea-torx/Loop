@@ -42,6 +42,18 @@ struct CoachMessage: Identifiable {
     ]
 }
 
+struct Conversation: Identifiable {
+    let id = UUID()
+    var title: String
+    var messages: [CoachMessage]
+    var createdAt = Date()
+    var updatedAt = Date()
+
+    var preview: String {
+        messages.last?.text ?? "New conversation"
+    }
+}
+
 struct DailyTask: Identifiable {
     let id = UUID()
     var title: String

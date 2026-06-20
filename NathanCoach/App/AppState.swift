@@ -4,8 +4,24 @@ import SwiftUI
 @MainActor
 final class AppState: ObservableObject {
     @Published var profile = UserProfile.seed
-    @Published var messages: [CoachMessage] = CoachMessage.seed
+    @Published var conversations: [Conversation] = []
+    @Published var activeConversationID: Conversation.ID?
     @Published var tasks: [DailyTask] = DailyTask.seed
+
+    /// Active conversation's messages, bridged so existing call sites keep working.
+    var messages: [CoachMessage] {
+        get { activeConversation?.messages ?? [] }
+        set {
+            guard let id = activeConversationID ?? conversations.first?.id,
+                  let index = conversations.firstIndex(where: { $0.id == id }) else { return }
+            conversations[index].messages = newValue
+            conversations[index].updatedAt = Date()
+        }
+    }
+
+    var activeConversation: Conversation? {
+        conversations.first { $0.id == activeConversationID } ?? conversations.first
+    }
     @Published var workouts: [WorkoutSession] = WorkoutSession.seed
     @Published var workoutSchedule: [WorkoutDayPlan] = WorkoutDayPlan.seed
     @Published var selectedWorkoutDayID: WorkoutDayPlan.ID?
@@ -23,13 +39,33 @@ final class AppState: ObservableObject {
     let gateway = SupabaseGateway()
 
     func bootstrap() {
-        // Lead with a time-of-day coach check-in grounded in the Break 170 protocol.
-        if messages.count <= 1 {
-            messages = [CoachMessage(role: .assistant, text: CoachBriefing.opening())]
+        if conversations.isEmpty {
+            startNewConversation()
         }
         if selectedWorkoutDayID == nil {
             selectedWorkoutDayID = workoutSchedule.first?.id
         }
+    }
+
+    /// Open a fresh chat, leading with a time-of-day briefing grounded in the Break 170 protocol.
+    func startNewConversation() {
+        let convo = Conversation(
+            title: "New chat",
+            messages: [CoachMessage(role: .assistant, text: CoachBriefing.opening())]
+        )
+        conversations.insert(convo, at: 0)
+        activeConversationID = convo.id
+    }
+
+    func selectConversation(_ conversation: Conversation) {
+        activeConversationID = conversation.id
+    }
+
+    private func setTitleIfNeeded(from text: String) {
+        guard let id = activeConversationID,
+              let index = conversations.firstIndex(where: { $0.id == id }),
+              conversations[index].title == "New chat" else { return }
+        conversations[index].title = String(text.prefix(42))
     }
 
     var selectedWorkoutDay: WorkoutDayPlan? {
@@ -52,6 +88,7 @@ final class AppState: ObservableObject {
         guard !trimmed.isEmpty else { return }
 
         messages.append(CoachMessage(role: .user, text: trimmed))
+        setTitleIfNeeded(from: trimmed)
         let response = await coachService.respond(to: trimmed, state: self)
         apply(response)
     }

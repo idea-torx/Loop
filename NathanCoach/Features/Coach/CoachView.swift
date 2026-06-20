@@ -4,6 +4,7 @@ struct CoachView: View {
     @EnvironmentObject private var appState: AppState
     @State private var draft = ""
     @State private var isResponding = false
+    @State private var showsDrawer = false
     @FocusState private var isFocused: Bool
 
     private let quickPrompts: [(label: String, prefill: String, icon: String)] = [
@@ -14,42 +15,47 @@ struct CoachView: View {
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            coachHeader
-                .padding(.horizontal)
-                .padding(.top, 8)
+        ZStack {
+            VStack(spacing: 0) {
+                topBar
+                    .padding(.horizontal)
+                    .padding(.top, 8)
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(appState.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
-                        }
-                        if isResponding {
-                            HStack(spacing: 10) {
-                                coachOrb(size: 30)
-                                TypingIndicator()
-                                Spacer(minLength: 54)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 16) {
+                            ForEach(appState.messages) { message in
+                                MessageBubble(message: message)
+                                    .id(message.id)
                             }
-                            .id("typing")
+                            if isResponding {
+                                HStack(spacing: 10) {
+                                    coachOrb(size: 30)
+                                    TypingIndicator()
+                                    Spacer(minLength: 54)
+                                }
+                                .id("typing")
+                            }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 16)
+                        .padding(.bottom, 24)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
-                    .padding(.bottom, 24)
+                    .scrollIndicators(.hidden)
+                    .onChange(of: appState.messages.count) { _, _ in scrollToEnd(proxy) }
+                    .onChange(of: isResponding) { _, _ in scrollToEnd(proxy) }
+                    .onChange(of: appState.activeConversationID) { _, _ in scrollToEnd(proxy) }
                 }
-                .scrollIndicators(.hidden)
-                .onChange(of: appState.messages.count) { _, _ in scrollToEnd(proxy) }
-                .onChange(of: isResponding) { _, _ in scrollToEnd(proxy) }
-            }
 
-            quickPromptRow
-            composer
-                .padding(.horizontal, 14)
-                .padding(.bottom, 96)
+                quickPromptRow
+                composer
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 96)
+            }
+            .background(CoachTheme.background)
+
+            ConversationDrawer(isOpen: $showsDrawer)
         }
-        .background(CoachTheme.background)
     }
 
     private func scrollToEnd(_ proxy: ScrollViewProxy) {
@@ -62,25 +68,49 @@ struct CoachView: View {
         }
     }
 
-    // MARK: Header
+    // MARK: Compact top bar
 
-    private var coachHeader: some View {
-        HStack(spacing: 14) {
-            coachOrb(size: 50)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Coach")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                HStack(spacing: 6) {
-                    Circle().fill(.green).frame(width: 7, height: 7)
-                    Text("Online · Claude Haiku")
-                        .font(.caption)
-                        .foregroundStyle(CoachTheme.Text.muted)
-                }
+    private var topBar: some View {
+        ZStack {
+            HStack(spacing: 8) {
+                Circle().fill(.green).frame(width: 6, height: 6)
+                Text(appState.activeConversation?.title ?? "Coach")
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
             }
-            Spacer()
+            .frame(maxWidth: 200)
+
+            HStack {
+                iconButton("square.and.pencil") {
+                    Haptics.light()
+                    isFocused = false
+                    withAnimation(.snappy(duration: 0.3)) { appState.startNewConversation() }
+                }
+                .accessibilityLabel("New chat")
+
+                Spacer()
+
+                iconButton("bubble.left.and.bubble.right") {
+                    Haptics.light()
+                    isFocused = false
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { showsDrawer = true }
+                }
+                .accessibilityLabel("All chats")
+            }
         }
-        .padding(14)
-        .glassPanel(radius: CoachTheme.Radius.xl)
+        .frame(height: 44)
+    }
+
+    private func iconButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(CoachTheme.accent)
+                .frame(width: 40, height: 40)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .overlay { Circle().stroke(CoachTheme.Stroke.hairline, lineWidth: 1) }
+        }
+        .buttonStyle(.pressable)
     }
 
     private func coachOrb(size: CGFloat) -> some View {
@@ -158,6 +188,136 @@ struct CoachView: View {
             await appState.sendCoachMessage(message)
             isResponding = false
         }
+    }
+}
+
+// MARK: - Conversations drawer
+
+private struct ConversationDrawer: View {
+    @EnvironmentObject private var appState: AppState
+    @Binding var isOpen: Bool
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if isOpen {
+                Color.black.opacity(0.55)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .onTapGesture { isOpen = false }
+
+                panel
+                    .transition(.move(edge: .leading))
+            }
+        }
+        .animation(.spring(response: 0.42, dampingFraction: 0.86), value: isOpen)
+    }
+
+    private var sortedConversations: [Conversation] {
+        appState.conversations.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private var panel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Chats")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                Spacer()
+                Button { isOpen = false } label: {
+                    Image(systemName: "xmark")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(CoachTheme.Text.muted)
+                        .frame(width: 32, height: 32)
+                        .glassEffect(.regular.interactive(), in: Circle())
+                }
+                .buttonStyle(.pressable)
+            }
+            .padding(.top, 8)
+
+            Button {
+                Haptics.light()
+                appState.startNewConversation()
+                isOpen = false
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 15, weight: .semibold))
+                    Text("New chat")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    Spacer()
+                }
+                .foregroundStyle(.black)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(
+                    LinearGradient(colors: [CoachTheme.flame, CoachTheme.ember],
+                                   startPoint: .leading, endPoint: .trailing),
+                    in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                )
+            }
+            .buttonStyle(.pressable)
+
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(sortedConversations) { convo in
+                        conversationRow(convo)
+                    }
+                }
+                .padding(.bottom, 120)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .padding(.horizontal, 16)
+        .frame(width: 300)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                Rectangle().fill(CoachTheme.ink.opacity(0.5))
+            }
+            .ignoresSafeArea()
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(CoachTheme.Stroke.hairline).frame(width: 1).ignoresSafeArea()
+        }
+    }
+
+    private func conversationRow(_ convo: Conversation) -> some View {
+        let isActive = convo.id == appState.activeConversationID
+
+        return Button {
+            Haptics.soft()
+            appState.selectConversation(convo)
+            isOpen = false
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(convo.title)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(CoachTheme.Text.primary)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(convo.updatedAt.formatted(.relative(presentation: .numeric)))
+                        .font(.caption2)
+                        .foregroundStyle(CoachTheme.Text.faint)
+                }
+                Text(convo.preview)
+                    .font(.caption)
+                    .foregroundStyle(CoachTheme.Text.muted)
+                    .lineLimit(1)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                    .fill(isActive ? CoachTheme.glow : CoachTheme.Fill.soft)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                    .stroke(isActive ? CoachTheme.accent.opacity(0.6) : CoachTheme.Stroke.hairline, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.pressable)
     }
 }
 
