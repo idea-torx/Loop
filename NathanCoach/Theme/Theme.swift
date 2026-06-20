@@ -293,6 +293,146 @@ struct SelectableChip<Content: View>: View {
     }
 }
 
+// MARK: - Hero / data components
+
+/// Apple-Fitness-style circular progress ring with an animated gradient stroke.
+struct ProgressRing: View {
+    var progress: Double            // 0...1
+    var lineWidth: CGFloat = 14
+    var size: CGFloat = 150
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(CoachTheme.Fill.medium, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+
+            Circle()
+                .trim(from: 0, to: max(0.001, progress))
+                .stroke(
+                    AngularGradient(
+                        colors: [CoachTheme.rust, CoachTheme.ember, CoachTheme.flame, CoachTheme.ember],
+                        center: .center,
+                        startAngle: .degrees(-90),
+                        endAngle: .degrees(270)
+                    ),
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+                .shadow(color: CoachTheme.ember.opacity(0.5), radius: 8)
+        }
+        .frame(width: size, height: size)
+        .animation(.spring(response: 0.9, dampingFraction: 0.75), value: progress)
+    }
+}
+
+/// Big-numeral hero/stat readout (Strava-style).
+struct HeroStat: View {
+    let value: String
+    let label: String
+    var systemImage: String? = nil
+    var alignment: HorizontalAlignment = .leading
+
+    var body: some View {
+        VStack(alignment: alignment, spacing: 2) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.caption)
+                    .foregroundStyle(CoachTheme.accent)
+            }
+            Text(value)
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .foregroundStyle(CoachTheme.Text.primary)
+                .contentTransition(.numericText())
+            Text(label.uppercased())
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .tracking(0.6)
+                .foregroundStyle(CoachTheme.Text.faint)
+        }
+        .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .center)
+    }
+}
+
+/// Animated circular checkbox.
+struct CircularCheck: View {
+    var isOn: Bool
+    var size: CGFloat = 26
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(isOn ? CoachTheme.accent : CoachTheme.Text.faint, lineWidth: 2)
+                .frame(width: size, height: size)
+            Circle()
+                .fill(CoachTheme.accent)
+                .frame(width: size, height: size)
+                .scaleEffect(isOn ? 1 : 0)
+            Image(systemName: "checkmark")
+                .font(.system(size: size * 0.5, weight: .bold))
+                .foregroundStyle(.black)
+                .scaleEffect(isOn ? 1 : 0)
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.6), value: isOn)
+    }
+}
+
+/// Rounded leading icon tile used by list rows.
+struct IconTile: View {
+    let systemImage: String
+    var tint: Color = CoachTheme.accent
+    var size: CGFloat = 44
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [tint.opacity(0.28), tint.opacity(0.12)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .frame(width: size, height: size)
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(tint.opacity(0.35), lineWidth: 1)
+            }
+            .overlay {
+                Image(systemName: systemImage)
+                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
+    }
+}
+
+/// Section header with optional trailing accessory.
+struct SectionHeader<Trailing: View>: View {
+    let title: String
+    var subtitle: String? = nil
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachTheme.Text.primary)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(CoachTheme.Text.muted)
+                }
+            }
+            Spacer()
+            trailing
+        }
+    }
+}
+
+extension SectionHeader where Trailing == EmptyView {
+    init(title: String, subtitle: String? = nil) {
+        self.init(title: title, subtitle: subtitle) { EmptyView() }
+    }
+}
+
 // MARK: - Haptics
 
 enum Haptics {

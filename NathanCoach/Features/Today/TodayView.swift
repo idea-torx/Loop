@@ -5,191 +5,255 @@ struct TodayView: View {
     @State private var showsSettings = false
     @State private var appeared = false
 
+    private var completedCount: Int { appState.tasks.filter(\.isComplete).count }
+    private var totalCount: Int { appState.tasks.count }
+    private var progress: Double {
+        totalCount == 0 ? 0 : Double(completedCount) / Double(totalCount)
+    }
+
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: CoachTheme.Space.xl) {
-                    card(0) { header }
-                    card(1) { taskList }
-                    card(2) { reviewCard }
-                    card(3) { healthCard }
-                }
-                .padding()
-                .padding(.bottom, 104)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                stagger(0) { topBar }
+                stagger(1) { heroCard }
+                stagger(2) { taskSection }
+                stagger(3) { insightCard }
             }
-            .background(CoachTheme.background)
-            .scrollContentBackground(.hidden)
-            .navigationTitle(greeting)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showsSettings = true
-                    } label: {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.headline)
-                            .foregroundStyle(CoachTheme.accent)
-                            .frame(width: 38, height: 38)
-                            .glassEffect(.regular.interactive(), in: Circle())
-                            .overlay { Circle().stroke(CoachTheme.Stroke.panel, lineWidth: 1) }
-                    }
-                    .buttonStyle(.pressable)
-                    .accessibilityLabel("Settings")
-                }
-            }
-            .sheet(isPresented: $showsSettings) {
-                SettingsView()
-                    .environmentObject(appState)
-                    .preferredColorScheme(.dark)
-            }
+            .padding(.horizontal)
+            .padding(.top, 8)
+            .padding(.bottom, 120)
+        }
+        .background(CoachTheme.background)
+        .scrollContentBackground(.hidden)
+        .scrollIndicators(.hidden)
+        .sheet(isPresented: $showsSettings) {
+            SettingsView()
+                .environmentObject(appState)
+                .preferredColorScheme(.dark)
         }
         .onAppear {
-            withAnimation(.easeOut(duration: 0.5)) { appeared = true }
+            withAnimation { appeared = true }
         }
     }
 
-    /// Staggered fade/slide entrance for each card.
-    private func card<Content: View>(_ index: Int, @ViewBuilder content: () -> Content) -> some View {
+    private func stagger<Content: View>(_ index: Int, @ViewBuilder content: () -> Content) -> some View {
         content()
             .opacity(appeared ? 1 : 0)
-            .offset(y: appeared ? 0 : 18)
-            .animation(.easeOut(duration: 0.5).delay(Double(index) * 0.08), value: appeared)
+            .offset(y: appeared ? 0 : 22)
+            .animation(.easeOut(duration: 0.55).delay(Double(index) * 0.09), value: appeared)
+    }
+
+    // MARK: Top bar
+
+    private var topBar: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Date().formatted(.dateTime.weekday(.wide).month().day()).uppercased())
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .tracking(1)
+                    .foregroundStyle(CoachTheme.accent)
+                Text(greeting)
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachTheme.Text.primary)
+            }
+            Spacer()
+            Button {
+                Haptics.light()
+                showsSettings = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.headline)
+                    .foregroundStyle(CoachTheme.accent)
+                    .frame(width: 42, height: 42)
+                    .glassEffect(.regular.interactive(), in: Circle())
+                    .overlay { Circle().stroke(CoachTheme.Stroke.panel, lineWidth: 1) }
+            }
+            .buttonStyle(.pressable)
+            .accessibilityLabel("Settings")
+        }
+        .padding(.top, 8)
     }
 
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
-        let period: String
-
         switch hour {
-        case 5..<12:
-            period = "Good morning"
-        case 12..<17:
-            period = "Good afternoon"
-        case 17..<22:
-            period = "Good evening"
-        default:
-            period = "Good night"
-        }
-
-        return "\(period), Leo"
-    }
-
-    private var header: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: CoachTheme.Space.xs) {
-                Text("Stay close to the plan.")
-                    .font(.largeTitle.weight(.bold))
-                Text("The list does not vanish when you complete something. It stays visible, crossed out, and satisfying.")
-                    .font(.subheadline)
-                    .foregroundStyle(CoachTheme.Text.muted)
-            }
+        case 5..<12: return "Good morning"
+        case 12..<17: return "Good afternoon"
+        case 17..<22: return "Good evening"
+        default: return "Good night"
         }
     }
 
-    private var taskList: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: CoachTheme.Space.md) {
-                Text("Daily adherence")
-                    .font(.headline)
+    // MARK: Hero
 
-                ForEach(appState.tasks) { task in
-                    taskRow(task)
-                }
-            }
-        }
-    }
-
-    private func taskRow(_ task: DailyTask) -> some View {
-        Button {
-            complete(task)
-        } label: {
-            HStack(spacing: CoachTheme.Space.lg) {
-                Image(systemName: task.isComplete ? "checkmark.circle.fill" : task.systemImage)
-                    .font(.title3)
-                    .foregroundStyle(task.isComplete ? CoachTheme.accent : CoachTheme.accent.opacity(0.85))
-                    .frame(width: 32)
-                    .symbolEffect(.bounce, value: task.isComplete)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(task.title)
-                        .font(.body.weight(.semibold))
-                        .strikethrough(task.isComplete, color: .white.opacity(0.8))
-                    Text(task.detail)
-                        .font(.caption)
+    private var heroCard: some View {
+        HStack(spacing: 20) {
+            ZStack {
+                ProgressRing(progress: appeared ? progress : 0, lineWidth: 13, size: 132)
+                VStack(spacing: 0) {
+                    Text("\(completedCount)")
+                        .font(.system(size: 40, weight: .heavy, design: .rounded))
+                        .foregroundStyle(CoachTheme.Text.primary)
+                        .contentTransition(.numericText())
+                    Text("of \(totalCount) done")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(CoachTheme.Text.muted)
-                        .strikethrough(task.isComplete, color: .white.opacity(0.45))
                 }
-
-                Spacer()
-
-                Image(systemName: task.isComplete ? "checkmark" : "circle")
-                    .foregroundStyle(task.isComplete ? CoachTheme.accent : CoachTheme.Text.faint)
             }
-            .foregroundStyle(.white)
-            .opacity(task.isComplete ? 0.7 : 1)
-            .padding()
-            .modifier(TaskChipStyle(isComplete: task.isComplete))
+
+            VStack(alignment: .leading, spacing: 16) {
+                HeroStat(value: appState.healthMetrics.steps.formatted(), label: "Steps", systemImage: "figure.walk")
+                HeroStat(value: "\(appState.healthMetrics.activeEnergy)", label: "Active cal", systemImage: "flame.fill")
+                HeroStat(value: "\(appState.healthMetrics.workoutsThisWeek)", label: "Workouts", systemImage: "dumbbell.fill")
+            }
         }
-        .buttonStyle(.pressable)
-        // Swipe-to-complete: a rightward drag marks the task done.
-        .gesture(
-            DragGesture(minimumDistance: 24)
-                .onEnded { value in
-                    if value.translation.width > 40 && !task.isComplete {
-                        complete(task)
-                    }
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassPanel(radius: CoachTheme.Radius.xl)
+    }
+
+    // MARK: Tasks
+
+    private var taskSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            SectionHeader(title: "Today's focus", subtitle: "\(completedCount)/\(totalCount) complete · swipe to check off")
+
+            VStack(spacing: 10) {
+                ForEach(appState.tasks) { task in
+                    TaskRowView(task: task) { complete(task) }
                 }
-        )
+            }
+        }
     }
 
     private func complete(_ task: DailyTask) {
-        Haptics.light()
-        withAnimation(.snappy(duration: 0.3)) {
+        Haptics.success()
+        withAnimation(.snappy(duration: 0.35)) {
             appState.toggleTask(task)
         }
     }
 
-    private var reviewCard: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: CoachTheme.Space.sm) {
-                Label(appState.weeklyReview.title, systemImage: "calendar.badge.clock")
-                    .font(.headline)
-                Text(appState.weeklyReview.summary)
-                    .font(.subheadline)
-                    .foregroundStyle(CoachTheme.Text.muted)
+    // MARK: Insight
 
-                ForEach(appState.weeklyReview.suggestions, id: \.self) { suggestion in
-                    Label(suggestion, systemImage: "sparkle")
+    private var insightCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                IconTile(systemImage: "sparkles", size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(appState.weeklyReview.title)
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                    Text("Coach insight")
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.82))
+                        .foregroundStyle(CoachTheme.accent)
+                }
+            }
+
+            Text(appState.weeklyReview.summary)
+                .font(.subheadline)
+                .foregroundStyle(CoachTheme.Text.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(appState.weeklyReview.suggestions, id: \.self) { suggestion in
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle()
+                            .fill(CoachTheme.accent)
+                            .frame(width: 5, height: 5)
+                            .padding(.top, 7)
+                        Text(suggestion)
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
         }
-    }
-
-    private var healthCard: some View {
-        GlassCard {
-            HStack {
-                MetricTile(title: "Steps", value: appState.healthMetrics.steps.formatted())
-                MetricTile(title: "Active", value: "\(appState.healthMetrics.activeEnergy) cal")
-                MetricTile(title: "Workouts", value: "\(appState.healthMetrics.workoutsThisWeek)")
-            }
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassPanel(radius: CoachTheme.Radius.xl)
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(CoachTheme.accent)
+                .frame(width: 4)
+                .padding(.vertical, 22)
         }
     }
 }
 
-/// Selection-aware background for a task row.
-private struct TaskChipStyle: ViewModifier {
-    let isComplete: Bool
+// MARK: - Task row with swipe-to-complete
 
-    func body(content: Content) -> some View {
-        content
+private struct TaskRowView: View {
+    let task: DailyTask
+    let onComplete: () -> Void
+
+    @State private var drag: CGFloat = 0
+    private let threshold: CGFloat = 72
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            // Reveal behind the row as it slides right (only while dragging).
+            if !task.isComplete && drag > 0 {
+                RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                    .fill(CoachTheme.ember)
+                    .overlay(alignment: .leading) {
+                        Image(systemName: drag > threshold ? "checkmark.circle.fill" : "checkmark")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.black)
+                            .padding(.leading, 22)
+                            .opacity(Double(min(drag / threshold, 1)))
+                    }
+            }
+
+            rowContent
+                .offset(x: drag)
+                .gesture(
+                    DragGesture(minimumDistance: 14)
+                        .onChanged { value in
+                            guard !task.isComplete else { return }
+                            drag = max(0, min(value.translation.width, 110))
+                        }
+                        .onEnded { _ in
+                            if drag > threshold && !task.isComplete {
+                                onComplete()
+                            }
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { drag = 0 }
+                        }
+                )
+        }
+    }
+
+    private var rowContent: some View {
+        Button(action: onComplete) {
+            HStack(spacing: 14) {
+                IconTile(systemImage: task.systemImage)
+                    .saturation(task.isComplete ? 0.3 : 1)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(task.title)
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .strikethrough(task.isComplete, color: .white.opacity(0.6))
+                    Text(task.detail)
+                        .font(.caption)
+                        .foregroundStyle(CoachTheme.Text.muted)
+                }
+
+                Spacer()
+
+                CircularCheck(isOn: task.isComplete)
+            }
+            .foregroundStyle(.white)
+            .opacity(task.isComplete ? 0.6 : 1)
+            .padding(14)
             .background(
-                RoundedRectangle(cornerRadius: CoachTheme.Radius.sm, style: .continuous)
-                    .fill(isComplete ? CoachTheme.glow : CoachTheme.Fill.soft)
+                RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                    .fill(task.isComplete ? CoachTheme.Fill.subtle : CoachTheme.Fill.soft)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: CoachTheme.Radius.sm, style: .continuous)
-                    .stroke(isComplete ? CoachTheme.accent.opacity(0.5) : CoachTheme.Stroke.hairline, lineWidth: 1)
+                RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                    .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
             }
+            .clipShape(RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+        }
+        .buttonStyle(.pressable)
     }
 }
