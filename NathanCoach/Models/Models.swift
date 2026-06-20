@@ -8,10 +8,10 @@ struct UserProfile {
     var preferredTone: String
 
     static let seed = UserProfile(
-        displayName: "Nathan",
-        goal: "Lose fat, build consistency, and keep strength moving up.",
+        displayName: "Leo",
+        goal: "Break 170 — a sustainable fat-loss cut that preserves muscle.",
         trainingLevel: "Intermediate",
-        preferredTone: "Warm, direct, human"
+        preferredTone: "Warm, slightly wry, human"
     )
 }
 
@@ -65,10 +65,11 @@ struct WeighIn: Identifiable {
     let date: Date
     let pounds: Double
 
+    // Break 170 cut: ~172.1 → 169.8 over the trailing two weeks, with daily water noise.
     static let seed: [WeighIn] = stride(from: 13, through: 0, by: -1).map { offset in
         WeighIn(
             date: Calendar.current.date(byAdding: .day, value: -offset, to: Date()) ?? Date(),
-            pounds: 205.8 - Double(13 - offset) * 0.18 + Double.random(in: -0.35...0.35)
+            pounds: 172.14 - Double(13 - offset) * 0.18 + Double.random(in: -0.35...0.35)
         )
     }
 }

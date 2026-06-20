@@ -1,5 +1,103 @@
 import Foundation
 
+/// Single source of truth for Leo's "Break 170" protocol (mirrors claude-pt.md).
+/// Update these as the plan evolves; the coach briefing reads from here.
+enum PTProtocol {
+    static let name = "Leo"
+    static let goal = "Break 170"
+    static let latestWeight = 169.8
+    static let sevenDayAvg = 170.1
+    static let calorieRange = "2,100–2,300"
+    static let proteinRange = "160–175g"
+    static let stepGoal = "8–10k"
+
+    /// Training focus by weekday (1 = Sunday … 7 = Saturday).
+    static func focus(forWeekday weekday: Int) -> String {
+        switch weekday {
+        case 1: return "full-body rotation"
+        case 2: return "rest + batch cook"
+        case 3: return "back + biceps"
+        case 4: return "chest + triceps"
+        case 5: return "legs"
+        case 6: return "pull & arms"
+        default: return "chest + triceps"   // Saturday
+        }
+    }
+
+    static var todaysFocus: String {
+        focus(forWeekday: Calendar.current.component(.weekday, from: Date()))
+    }
+
+    static var isTrainingDay: Bool {
+        Calendar.current.component(.weekday, from: Date()) != 2   // Monday = rest
+    }
+}
+
+/// Builds the coach's time-of-day opening check-in.
+enum CoachBriefing {
+    enum Window { case morning, midday, dinner, gym, night }
+
+    static func window(at date: Date) -> Window {
+        switch Calendar.current.component(.hour, from: date) {
+        case 4..<11: return .morning
+        case 11..<15: return .midday
+        case 15..<17: return .dinner
+        case 17..<21: return .gym
+        default: return .night
+        }
+    }
+
+    static func opening(at date: Date = Date()) -> String {
+        let focus = PTProtocol.todaysFocus
+        let rest = !PTProtocol.isTrainingDay
+
+        switch window(at: date) {
+        case .morning:
+            return """
+            Morning, Leo. Weigh-in first — post-bathroom, pre-coffee.
+            You closed at \(PTProtocol.latestWeight.formatted()), 7-day avg \(PTProtocol.sevenDayAvg.formatted()). Under 170 and pointed the right way.
+            Today's \(focus). Fuel it: \(PTProtocol.calorieRange) cal, protein \(PTProtocol.proteinRange).
+            What's the scale say?
+            """
+        case .midday:
+            return """
+            Lunch window, Leo. Protein-first — chicken wrap, salad sandwich, or chicken + rice + greens.
+            Easy on the heavy dressings, and walk 10–15 after to bank steps toward \(PTProtocol.stepGoal).
+            \(rest ? "Rest day, so food discipline is the whole game today." : "You've got \(focus) later — keep the tank topped up.")
+            What are you eating?
+            """
+        case .dinner:
+            return """
+            Dinner's the big protein hit, Leo. Chicken + potatoes + broccoli, or salmon + potato + greens.
+            Goal is landing protein at \(PTProtocol.proteinRange) by bed.
+            A 20–30 min walk after does more than you'd think.
+            What's on the plate?
+            """
+        case .gym:
+            if rest {
+                return """
+                Rest day, Leo — no lift tonight. Steps, mobility, and an early-ish night.
+                Keep food on plan: \(PTProtocol.calorieRange) cal, protein \(PTProtocol.proteinRange).
+                Tomorrow we're back under the bar.
+                Anything feeling beat up I should plan around?
+                """
+            }
+            return """
+            Gym time, Leo. Tonight's \(focus).
+            Train 1–2 reps shy of failure — compound-first, then arms.
+            Call your sets as you go ("bench 185 x 5, 5, 4") and I'll log them and hand you targets to beat next time.
+            What are we opening with?
+            """
+        case .night:
+            return """
+            Protein check, Leo. If you're shy of ~165g, the 9 PM shake closes the gap — it's already in the budget.
+            Blend with frozen banana/PB if you want it to feel like a treat.
+            How'd today land — food, steps\(rest ? "" : ", training")?
+            """
+        }
+    }
+}
+
 actor CoachService {
     func respond(to message: String, state: AppState) async -> CoachResponse {
         let lower = message.lowercased()

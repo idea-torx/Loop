@@ -23,8 +23,9 @@ final class AppState: ObservableObject {
     let gateway = SupabaseGateway()
 
     func bootstrap() {
-        if messages.isEmpty {
-            messages = CoachMessage.seed
+        // Lead with a time-of-day coach check-in grounded in the Break 170 protocol.
+        if messages.count <= 1 {
+            messages = [CoachMessage(role: .assistant, text: CoachBriefing.opening())]
         }
         if selectedWorkoutDayID == nil {
             selectedWorkoutDayID = workoutSchedule.first?.id

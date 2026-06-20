@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var appState: AppState
-    @State private var selectedTab: AppTab = .today
+    @State private var selectedTab: AppTab = .coach
 
     var body: some View {
         ZStack {
