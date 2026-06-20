@@ -6,7 +6,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            CoachTheme.background.ignoresSafeArea()
+            AnimatedAuroraBackground()
 
             Group {
                 switch selectedTab {
@@ -54,45 +54,49 @@ enum AppTab: CaseIterable {
 
 struct ModernTabBar: View {
     @Binding var selectedTab: AppTab
+    @Namespace private var tabNamespace
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(AppTab.allCases, id: \.self) { tab in
-                Button {
-                    withAnimation(.snappy(duration: 0.22)) {
-                        selectedTab = tab
-                    }
-                } label: {
-                    LucideStyleIcon(tab: tab, isSelected: selectedTab == tab)
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: 0) {
+                ForEach(AppTab.allCases, id: \.self) { tab in
+                    Button {
+                        Haptics.light()
+                        withAnimation(.snappy(duration: 0.32)) {
+                            selectedTab = tab
+                        }
+                    } label: {
+                        LucideStyleIcon(
+                            tab: tab,
+                            isSelected: selectedTab == tab,
+                            namespace: tabNamespace
+                        )
                         .frame(maxWidth: .infinity)
                         .frame(height: 42)
                         .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(tab.accessibilityTitle)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(tab.accessibilityTitle)
             }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.thinMaterial, in: Capsule())
-        .background(Color.white.opacity(0.012), in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.32),
-                            Color.white.opacity(0.08)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 0.8
-                )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(
+                        LinearGradient(
+                            colors: [CoachTheme.Stroke.bright, CoachTheme.Stroke.hairline],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 0.8
+                    )
+            }
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 18)
-        .shadow(color: CoachTheme.mint.opacity(0.045), radius: 16, y: 5)
+        .shadow(color: CoachTheme.accent.opacity(0.10), radius: 16, y: 5)
         .shadow(color: .black.opacity(0.18), radius: 16, y: 8)
     }
 }
@@ -100,18 +104,20 @@ struct ModernTabBar: View {
 struct LucideStyleIcon: View {
     let tab: AppTab
     let isSelected: Bool
+    var namespace: Namespace.ID
 
     var body: some View {
         ZStack {
             if isSelected {
                 Circle()
-                    .fill(CoachTheme.mint.opacity(0.16))
+                    .fill(CoachTheme.glow)
                     .frame(width: 36, height: 36)
+                    .matchedGeometryEffect(id: "tabSelection", in: namespace)
             }
 
             TabLineIcon(tab: tab)
                 .stroke(
-                    isSelected ? CoachTheme.mint : Color.white.opacity(0.58),
+                    isSelected ? CoachTheme.accent : Color.white.opacity(0.58),
                     style: StrokeStyle(lineWidth: 2.1, lineCap: .round, lineJoin: .round)
                 )
                 .frame(width: 25, height: 25)
