@@ -433,6 +433,56 @@ extension SectionHeader where Trailing == EmptyView {
     }
 }
 
+/// Full-width primary CTA on accent glass.
+struct PrimaryButton: View {
+    let title: String
+    var systemImage: String? = nil
+    var isEnabled: Bool = true
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            Haptics.light()
+            action()
+        } label: {
+            HStack(spacing: 8) {
+                if let systemImage { Image(systemName: systemImage) }
+                Text(title)
+            }
+            .font(.system(size: 16, weight: .bold, design: .rounded))
+            .foregroundStyle(.black)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 15)
+            .glassEffect(.regular.tint(CoachTheme.accent).interactive(), in: Capsule())
+            .opacity(isEnabled ? 1 : 0.5)
+        }
+        .buttonStyle(.pressable)
+        .disabled(!isEnabled)
+    }
+}
+
+/// Three-dot typing indicator for the coach.
+struct TypingIndicator: View {
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { i in
+                    let phase = sin(t * 4 + Double(i) * 0.7)
+                    Circle()
+                        .fill(CoachTheme.accent)
+                        .frame(width: 7, height: 7)
+                        .opacity(0.4 + 0.6 * (phase + 1) / 2)
+                        .scaleEffect(0.8 + 0.3 * (phase + 1) / 2)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
 // MARK: - Haptics
 
 enum Haptics {
