@@ -100,7 +100,8 @@ struct TrendsView: View {
                 ForEach(rollingWeights) { point in
                     AreaMark(
                         x: .value("Date", point.date),
-                        y: .value("Weight", point.pounds)
+                        yStart: .value("Baseline", weightDomain.lowerBound),
+                        yEnd: .value("Weight", point.pounds)
                     )
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(
@@ -153,6 +154,9 @@ struct TrendsView: View {
                 }
             }
             .frame(height: 200)
+            .chartPlotStyle { plot in
+                plot.clipped()
+            }
             .chartOverlay { proxy in
                 GeometryReader { geo in
                     Rectangle().fill(.clear).contentShape(Rectangle())
