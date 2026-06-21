@@ -1,9 +1,11 @@
 import Charts
+import PhotosUI
 import SwiftUI
 
 struct TrendsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var selectedWeighIn: WeighIn?
+    @State private var showsMealEntry = false
     @State private var appeared = false
 
     private var rollingWeights: [WeighIn] {
@@ -14,7 +16,7 @@ struct TrendsView: View {
     private var startWeight: Double { appState.weighIns.first?.pounds ?? currentWeight }
     private var delta: Double { currentWeight - startWeight }
 
-    /// Tight y-range around the data so the trend reads expressively (AreaMark would otherwise pull the axis to 0).
+    /// Tight y-range around the data so the trend reads expressively.
     private var weightDomain: ClosedRange<Double> {
         let values = appState.weighIns.map(\.pounds)
         guard let lo = values.min(), let hi = values.max() else { return 0...1 }
@@ -28,8 +30,7 @@ struct TrendsView: View {
                 header
                 weightHero
                 weightChart
-                adherenceCard
-                metricGrid
+                nutritionSection
                 insightCard
             }
             .padding(.horizontal)
@@ -38,12 +39,18 @@ struct TrendsView: View {
         }
         .background(CoachTheme.background)
         .scrollIndicators(.hidden)
+        .sheet(isPresented: $showsMealEntry) {
+            MealEntrySheet { description, imageData in
+                await appState.logMealWithHaiku(description: description, imageData: imageData)
+            }
+            .preferredColorScheme(.dark)
+        }
         .onAppear { withAnimation(.easeOut(duration: 0.6)) { appeared = true } }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("LAST 14 DAYS")
+            Text("FOOD & WEIGHT")
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .tracking(1)
                 .foregroundStyle(CoachTheme.accent)
@@ -53,11 +60,11 @@ struct TrendsView: View {
         .padding(.top, 8)
     }
 
-    // MARK: Weight hero
+    // MARK: Weight
 
     private var weightHero: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("CURRENT WEIGHT")
+            Text("CURRENT WEIGHT · GOAL \(PTProtocol.goal.uppercased())")
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .tracking(0.8)
                 .foregroundStyle(CoachTheme.Text.faint)
@@ -87,13 +94,11 @@ struct TrendsView: View {
         .glassPanel(radius: CoachTheme.Radius.xl)
     }
 
-    // MARK: Weight chart
-
     private var weightChart: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeader(
                 title: "Weight trend",
-                subtitle: selectedWeighIn.map { "\($0.date.formatted(.dateTime.month().day())) · \($0.pounds.formatted(.number.precision(.fractionLength(1)))) lb" } ?? "Drag to inspect"
+                subtitle: selectedWeighIn.map { "\($0.date.formatted(.dateTime.month().day())) · \($0.pounds.formatted(.number.precision(.fractionLength(1)))) lb" } ?? "Last 14 days · drag to inspect"
             )
 
             Chart {
@@ -142,7 +147,7 @@ struct TrendsView: View {
             }
             .chartYScale(domain: weightDomain)
             .chartYAxis {
-                AxisMarks { value in
+                AxisMarks { _ in
                     AxisGridLine().foregroundStyle(CoachTheme.Stroke.hairline)
                     AxisValueLabel().foregroundStyle(CoachTheme.Text.faint)
                 }
@@ -154,11 +159,9 @@ struct TrendsView: View {
                 }
             }
             .frame(height: 200)
-            .chartPlotStyle { plot in
-                plot.clipped()
-            }
+            .chartPlotStyle { $0.clipped() }
             .chartOverlay { proxy in
-                GeometryReader { geo in
+                GeometryReader { _ in
                     Rectangle().fill(.clear).contentShape(Rectangle())
                         .gesture(
                             DragGesture(minimumDistance: 0)
@@ -178,63 +181,131 @@ struct TrendsView: View {
         .glassPanel(radius: CoachTheme.Radius.lg)
     }
 
-    // MARK: Adherence
+    // MARK: Nutrition
 
-    private var adherenceCard: some View {
-        let done = appState.tasks.filter(\.isComplete).count
-        let total = appState.tasks.count
-
-        return VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "Adherence", subtitle: "\(done) of \(total) tasks done today")
-
-            Chart(appState.tasks) { task in
-                BarMark(
-                    x: .value("Task", task.title),
-                    y: .value("Done", task.isComplete ? 1 : 0)
-                )
-                .foregroundStyle(
-                    task.isComplete
-                        ? LinearGradient(colors: [CoachTheme.flame, CoachTheme.ember], startPoint: .top, endPoint: .bottom)
-                        : LinearGradient(colors: [CoachTheme.Fill.medium, CoachTheme.Fill.subtle], startPoint: .top, endPoint: .bottom)
-                )
-                .cornerRadius(6)
+    private var nutritionSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionHeader(title: "Today's fuel", subtitle: healthNote) {
+                Button {
+                    Haptics.light()
+                    showsMealEntry = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(CoachTheme.accent)
+                        .frame(width: 34, height: 34)
+                        .glassEffect(.regular.interactive(), in: Circle())
+                        .overlay { Circle().stroke(CoachTheme.Stroke.hairline, lineWidth: 1) }
+                }
+                .buttonStyle(.pressable)
+                .accessibilityLabel("Log a meal")
             }
-            .chartYScale(domain: 0...1)
-            .chartYAxis(.hidden)
-            .chartXAxis {
-                AxisMarks { _ in
-                    AxisValueLabel()
-                        .foregroundStyle(CoachTheme.Text.faint)
+
+            VStack(spacing: 14) {
+                nutrientBar(label: "Protein", value: appState.proteinToday, target: PTProtocol.proteinTargetG, unit: "g")
+                nutrientBar(label: "Calories", value: appState.caloriesToday, target: PTProtocol.calorieTarget, unit: "")
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity)
+            .glassPanel(radius: CoachTheme.Radius.lg)
+
+            if appState.todaysMeals.isEmpty {
+                Button {
+                    Haptics.light()
+                    showsMealEntry = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "camera.fill")
+                        Text("Log a meal — describe it or snap a photo")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption)
+                    }
+                    .foregroundStyle(CoachTheme.Text.muted)
+                    .padding(16)
+                    .frame(maxWidth: .infinity)
+                    .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
+                            .foregroundStyle(CoachTheme.Stroke.panel)
+                    }
+                }
+                .buttonStyle(.pressable)
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(appState.todaysMeals) { meal in
+                        mealRow(meal)
+                    }
                 }
             }
-            .frame(height: 140)
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassPanel(radius: CoachTheme.Radius.lg)
-    }
-
-    // MARK: Metric grid
-
-    private var metricGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-            metricTile("Steps today", appState.healthMetrics.steps.formatted(), "figure.walk")
-            metricTile("Active energy", "\(appState.healthMetrics.activeEnergy) cal", "flame.fill")
-            metricTile("Training volume", "\(appState.workouts.first?.volume ?? 0) lb", "dumbbell.fill")
-            metricTile("Workouts", "\(appState.healthMetrics.workoutsThisWeek)", "checkmark.seal.fill")
         }
     }
 
-    private func metricTile(_ title: String, _ value: String, _ icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: icon)
-                .font(.subheadline)
-                .foregroundStyle(CoachTheme.accent)
-            MetricTile(title: title, value: value)
+    private func nutrientBar(label: String, value: Int, target: Int, unit: String) -> some View {
+        let progress = target == 0 ? 0 : min(1, Double(value) / Double(target))
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                Spacer()
+                Text("\(value.formatted())\(unit) ")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachTheme.Text.primary)
+                + Text("/ \(target.formatted())\(unit)")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(CoachTheme.Text.faint)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(CoachTheme.Fill.medium)
+                    Capsule()
+                        .fill(LinearGradient(colors: [CoachTheme.flame, CoachTheme.ember], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(6, geo.size.width * progress))
+                }
+            }
+            .frame(height: 10)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassPanel(radius: CoachTheme.Radius.md)
+    }
+
+    private func mealRow(_ meal: MealLog) -> some View {
+        HStack(spacing: 14) {
+            if let data = meal.imageData, let image = UIImage(data: data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else {
+                IconTile(systemImage: "fork.knife", size: 48)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(meal.title)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                Text("\(meal.protein)g protein · \(meal.calories) cal")
+                    .font(.caption)
+                    .foregroundStyle(CoachTheme.Text.muted)
+            }
+            Spacer()
+            Text(meal.date.formatted(date: .omitted, time: .shortened))
+                .font(.caption2)
+                .foregroundStyle(CoachTheme.Text.faint)
+        }
+        .padding(12)
+        .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
+        }
+    }
+
+    private var healthNote: String {
+        let protein = appState.proteinToday
+        let target = PTProtocol.proteinTargetG
+        if appState.todaysMeals.isEmpty { return "Nothing logged yet today" }
+        if protein >= target { return "Protein locked in — nicely done" }
+        return "\(target - protein)g protein to go"
     }
 
     // MARK: Insight
@@ -266,5 +337,131 @@ struct TrendsView: View {
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassPanel(radius: CoachTheme.Radius.xl)
+    }
+}
+
+// MARK: - Meal entry (describe or photo)
+
+private struct MealEntrySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let onSave: (_ description: String, _ imageData: Data?) async -> Void
+
+    @State private var photoItem: PhotosPickerItem?
+    @State private var imageData: Data?
+    @State private var description = ""
+    @State private var isLogging = false
+
+    private var isValid: Bool {
+        !description.trimmingCharacters(in: .whitespaces).isEmpty || imageData != nil
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Text("Log a meal")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(CoachTheme.Text.muted)
+                            .frame(width: 34, height: 34)
+                            .glassEffect(.regular.interactive(), in: Circle())
+                    }
+                    .buttonStyle(.pressable)
+                }
+
+                photoPicker
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("WHAT DID YOU EAT?")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .tracking(0.8)
+                        .foregroundStyle(CoachTheme.Text.faint)
+                    TextField("e.g. Chicken bowl with rice and greens", text: $description, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(2...4)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                                .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
+                        }
+                }
+
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                    Text("Haiku estimates the calories & protein automatically — no need to enter numbers.")
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.caption)
+                .foregroundStyle(CoachTheme.Text.faint)
+
+                if isLogging {
+                    HStack(spacing: 10) {
+                        ProgressView().tint(CoachTheme.accent)
+                        Text("Evaluating with Haiku…")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .foregroundStyle(CoachTheme.Text.muted)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 15)
+                } else {
+                    PrimaryButton(title: "Log meal", systemImage: "checkmark", isEnabled: isValid) {
+                        let text = description.trimmingCharacters(in: .whitespaces)
+                        let prompt = text.isEmpty ? "Estimate this meal from the photo." : text
+                        isLogging = true
+                        Task {
+                            await onSave(prompt, imageData)
+                            dismiss()
+                        }
+                    }
+                }
+            }
+            .padding()
+            .padding(.bottom, 40)
+        }
+        .background(CoachTheme.background.ignoresSafeArea())
+    }
+
+    private var photoPicker: some View {
+        PhotosPicker(selection: $photoItem, matching: .images) {
+            ZStack {
+                if let imageData, let image = UIImage(data: imageData) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(height: 170)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: CoachTheme.Radius.lg, style: .continuous))
+                } else {
+                    VStack(spacing: 8) {
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 26))
+                            .foregroundStyle(CoachTheme.accent)
+                        Text("Add a photo")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(CoachTheme.Text.muted)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 130)
+                    .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.lg, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: CoachTheme.Radius.lg, style: .continuous)
+                            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [6, 4]))
+                            .foregroundStyle(CoachTheme.Stroke.panel)
+                    }
+                }
+            }
+        }
+        .onChange(of: photoItem) { _, item in
+            Task {
+                if let data = try? await item?.loadTransferable(type: Data.self) {
+                    imageData = data
+                }
+            }
+        }
     }
 }

@@ -11,6 +11,32 @@ final class ReminderScheduler {
         }
     }
 
+    /// Schedule a repeating daily reminder for each task that has a time set.
+    /// Best-effort: silently no-ops if notifications aren't authorized.
+    func scheduleTaskReminders(_ tasks: [DailyTask], tone: String) async {
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        let taskIDs = pending.map(\.identifier).filter { $0.hasPrefix("task-") }
+        center.removePendingNotificationRequests(withIdentifiers: taskIDs)
+
+        let calendar = Calendar.current
+        for task in tasks {
+            guard let time = task.reminderTime else { continue }
+            var date = DateComponents()
+            date.hour = calendar.component(.hour, from: time)
+            date.minute = calendar.component(.minute, from: time)
+
+            let content = UNMutableNotificationContent()
+            content.title = task.title
+            content.body = task.detail.isEmpty ? "Time to check this off, Leo." : task.detail
+            content.sound = .default
+
+            let trigger = UNCalendarNotificationTrigger(dateMatching: date, repeats: true)
+            let request = UNNotificationRequest(identifier: "task-\(task.id.uuidString)", content: content, trigger: trigger)
+            try? await center.add(request)
+        }
+    }
+
     func scheduleDailyNudges(tone: String) async {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: ReminderRule.defaultRules.map(\.id))

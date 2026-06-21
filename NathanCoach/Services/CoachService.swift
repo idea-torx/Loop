@@ -10,6 +10,8 @@ enum PTProtocol {
     static let calorieRange = "2,100–2,300"
     static let proteinRange = "160–175g"
     static let stepGoal = "8–10k"
+    static let calorieTarget = 2_200
+    static let proteinTargetG = 170
 
     /// Training focus by weekday (1 = Sunday … 7 = Saturday).
     static func focus(forWeekday weekday: Int) -> String {
@@ -95,6 +97,139 @@ enum CoachBriefing {
             How'd today land — food, steps\(rest ? "" : ", training")?
             """
         }
+    }
+}
+
+/// Parses natural-language commands the coach can act on directly (reminders, meals).
+enum CommandParser {
+    enum ReminderCommand {
+        case add(title: String, time: Date?)
+        case move(keyword: String, time: Date)
+        case remove(keyword: String)
+    }
+
+    private static let stopWords: Set<String> = [
+        "delete", "remove", "cancel", "move", "change", "set", "reschedule", "make",
+        "my", "the", "a", "an", "reminder", "reminders", "task", "nudge", "alarm",
+        "to", "at", "for", "please", "remind", "me", "of", "on"
+    ]
+
+    static func reminderCommand(from text: String) -> ReminderCommand? {
+        let lower = text.lowercased()
+        let mentionsReminder = lower.contains("remind") || lower.contains("reminder")
+            || lower.contains("nudge") || lower.contains("alarm")
+
+        // Remove: "delete the evening review reminder"
+        if (lower.contains("delete") || lower.contains("remove") || lower.contains("cancel")),
+           mentionsReminder || lower.contains("task") {
+            let keyword = extractKeyword(from: lower)
+            return keyword.isEmpty ? nil : .remove(keyword: keyword)
+        }
+
+        // Add: "remind me to take creatine at 9pm"
+        if let range = lower.range(of: "remind me to ") {
+            let rest = String(lower[range.upperBound...])
+            let time = parseTime(from: rest)
+            let title = cleanTitle(from: rest)
+            return title.isEmpty ? nil : .add(title: title, time: time)
+        }
+
+        // Move: "move my weigh-in to 8am" / "change dinner reminder to 6:30"
+        if (lower.contains("move") || lower.contains("change") || lower.contains("reschedule")
+            || lower.contains("set") || lower.contains("make")),
+           let time = parseTime(from: lower) {
+            let keyword = extractKeyword(from: lower)
+            return keyword.isEmpty ? nil : .move(keyword: keyword, time: time)
+        }
+
+        return nil
+    }
+
+    /// Returns a meal description if the message reads like a meal log, else nil.
+    static func mealLog(from text: String) -> String? {
+        let lower = text.lowercased()
+        if lower.contains("?") { return nil }
+        if reminderCommand(from: text) != nil { return nil }
+
+        let mealWords = ["breakfast", "lunch", "dinner", "snack", " ate ", "i ate",
+                         "just ate", "had ", "eating", "meal", "log meal", "for lunch", "for dinner"]
+        let isMeal = mealWords.contains { lower.contains($0) }
+        guard isMeal else { return nil }
+        // Need some actual content, not just "lunch done".
+        let words = lower.split(separator: " ")
+        guard words.count >= 3 else { return nil }
+        return text
+    }
+
+    static func mealKeyword(in text: String) -> String? {
+        let lower = text.lowercased()
+        if lower.contains("breakfast") { return "Morning weigh-in" }
+        if lower.contains("lunch") { return "Lunch" }
+        if lower.contains("dinner") { return "Dinner" }
+        return nil
+    }
+
+    // MARK: Helpers
+
+    private static func cleanTitle(from text: String) -> String {
+        // Drop a trailing "at <time>" clause, then tidy.
+        var working = text
+        if let atRange = working.range(of: " at ", options: .backwards) {
+            working = String(working[..<atRange.lowerBound])
+        }
+        return working
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .capitalizedFirst
+    }
+
+    private static func extractKeyword(from text: String) -> String {
+        // Strip a time clause first.
+        var working = text
+        if let atRange = working.range(of: " to ", options: .backwards) {
+            working = String(working[..<atRange.lowerBound])
+        }
+        let tokens = working
+            .replacingOccurrences(of: "-", with: " ")
+            .split { !$0.isLetter }
+            .map(String.init)
+            .filter { !stopWords.contains($0) && $0.count > 1 }
+        return tokens.joined(separator: " ")
+    }
+
+    /// Parse a clock time like "8", "8:45", "9am", "6:30 pm", "noon".
+    static func parseTime(from text: String) -> Date? {
+        let lower = text.lowercased()
+        if lower.contains("noon") { return at(12, 0) }
+        if lower.contains("midnight") { return at(0, 0) }
+
+        guard let regex = try? NSRegularExpression(pattern: #"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?"#) else { return nil }
+        let ns = lower as NSString
+        guard let match = regex.firstMatch(in: lower, range: NSRange(location: 0, length: ns.length)) else { return nil }
+
+        func group(_ i: Int) -> String? {
+            let r = match.range(at: i)
+            return r.location == NSNotFound ? nil : ns.substring(with: r)
+        }
+
+        guard var hour = group(1).flatMap(Int.init) else { return nil }
+        let minute = group(2).flatMap(Int.init) ?? 0
+        let meridiem = group(3)
+
+        if meridiem == "pm", hour < 12 { hour += 12 }
+        if meridiem == "am", hour == 12 { hour = 0 }
+        guard (0...23).contains(hour), (0...59).contains(minute) else { return nil }
+        return at(hour, minute)
+    }
+
+    private static func at(_ hour: Int, _ minute: Int) -> Date {
+        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
+    }
+}
+
+private extension String {
+    var capitalizedFirst: String {
+        guard let first else { return self }
+        return first.uppercased() + dropFirst()
     }
 }
 

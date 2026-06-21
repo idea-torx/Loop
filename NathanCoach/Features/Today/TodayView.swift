@@ -4,6 +4,8 @@ struct TodayView: View {
     @EnvironmentObject private var appState: AppState
     @State private var showsSettings = false
     @State private var appeared = false
+    @State private var showsEditor = false
+    @State private var editorSeed: DailyTask?
 
     private var completedCount: Int { appState.tasks.filter(\.isComplete).count }
     private var totalCount: Int { appState.tasks.count }
@@ -30,6 +32,12 @@ struct TodayView: View {
             SettingsView()
                 .environmentObject(appState)
                 .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showsEditor) {
+            TaskEditorSheet(existing: editorSeed) { task in
+                appState.upsertTask(task)
+            }
+            .preferredColorScheme(.dark)
         }
         .onAppear {
             withAnimation { appeared = true }
@@ -116,11 +124,38 @@ struct TodayView: View {
 
     private var taskSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "Today's focus", subtitle: "\(completedCount)/\(totalCount) complete · swipe to check off")
+            SectionHeader(title: "Today's focus", subtitle: "\(completedCount)/\(totalCount) complete · swipe to check off") {
+                Button {
+                    Haptics.light()
+                    editorSeed = nil
+                    showsEditor = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(CoachTheme.accent)
+                        .frame(width: 34, height: 34)
+                        .glassEffect(.regular.interactive(), in: Circle())
+                        .overlay { Circle().stroke(CoachTheme.Stroke.hairline, lineWidth: 1) }
+                }
+                .buttonStyle(.pressable)
+                .accessibilityLabel("Add reminder")
+            }
 
             VStack(spacing: 10) {
                 ForEach(appState.tasks) { task in
-                    TaskRowView(task: task) { complete(task) }
+                    TaskRowView(
+                        task: task,
+                        onComplete: { complete(task) },
+                        onEdit: {
+                            Haptics.light()
+                            editorSeed = task
+                            showsEditor = true
+                        },
+                        onDelete: {
+                            Haptics.soft()
+                            withAnimation(.snappy(duration: 0.3)) { appState.deleteTask(task) }
+                        }
+                    )
                 }
             }
         }
@@ -185,6 +220,8 @@ struct TodayView: View {
 private struct TaskRowView: View {
     let task: DailyTask
     let onComplete: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
 
     @State private var drag: CGFloat = 0
     private let threshold: CGFloat = 72
@@ -232,9 +269,16 @@ private struct TaskRowView: View {
                     Text(task.title)
                         .font(.system(size: 16, weight: .semibold, design: .rounded))
                         .strikethrough(task.isComplete, color: .white.opacity(0.6))
-                    Text(task.detail)
-                        .font(.caption)
-                        .foregroundStyle(CoachTheme.Text.muted)
+                    HStack(spacing: 8) {
+                        Text(task.detail)
+                            .font(.caption)
+                            .foregroundStyle(CoachTheme.Text.muted)
+                        if let time = task.reminderTime {
+                            Label(time.formatted(date: .omitted, time: .shortened), systemImage: "bell.fill")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(CoachTheme.accent)
+                        }
+                    }
                 }
 
                 Spacer()
@@ -255,5 +299,145 @@ private struct TaskRowView: View {
             .clipShape(RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
         }
         .buttonStyle(.pressable)
+        .contextMenu {
+            Button { onEdit() } label: { Label("Edit reminder", systemImage: "pencil") }
+            Button(role: .destructive) { onDelete() } label: { Label("Delete", systemImage: "trash") }
+        }
+    }
+}
+
+// MARK: - Task editor
+
+private struct TaskEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let existing: DailyTask?
+    let onSave: (DailyTask) -> Void
+
+    @State private var title = ""
+    @State private var detail = ""
+    @State private var symbol = "checklist"
+    @State private var hasReminder = true
+    @State private var time = DailyTask.time(9, 0)
+
+    private let symbols = [
+        "checklist", "scalemass.fill", "fork.knife", "takeoutbag.and.cup.and.straw.fill",
+        "figure.strengthtraining.traditional", "figure.walk", "moon.stars.fill",
+        "drop.fill", "pills.fill", "bed.double.fill", "cup.and.saucer.fill", "heart.fill"
+    ]
+
+    private var isValid: Bool {
+        !title.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Text(existing == nil ? "New reminder" : "Edit reminder")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(CoachTheme.Text.muted)
+                            .frame(width: 34, height: 34)
+                            .glassEffect(.regular.interactive(), in: Circle())
+                    }
+                    .buttonStyle(.pressable)
+                }
+
+                field("TITLE") {
+                    TextField("e.g. Afternoon walk", text: $title)
+                        .textFieldStyle(.plain)
+                }
+
+                field("DETAIL") {
+                    TextField("Short note", text: $detail)
+                        .textFieldStyle(.plain)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("ICON")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .tracking(0.8)
+                        .foregroundStyle(CoachTheme.Text.faint)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(symbols, id: \.self) { sym in
+                                Button { Haptics.soft(); symbol = sym } label: {
+                                    IconTile(systemImage: sym, size: 44)
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                .stroke(CoachTheme.accent, lineWidth: symbol == sym ? 2 : 0)
+                                        }
+                                }
+                                .buttonStyle(.pressable)
+                            }
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle(isOn: $hasReminder.animation(.snappy)) {
+                        Label("Remind me", systemImage: "bell.fill")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    }
+                    .tint(CoachTheme.accent)
+
+                    if hasReminder {
+                        DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
+                            .datePickerStyle(.wheel)
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(16)
+                .glassPanel(radius: CoachTheme.Radius.lg)
+
+                PrimaryButton(title: existing == nil ? "Add reminder" : "Save changes", systemImage: "checkmark", isEnabled: isValid) {
+                    save()
+                }
+            }
+            .padding()
+            .padding(.bottom, 40)
+        }
+        .background(CoachTheme.background.ignoresSafeArea())
+        .onAppear {
+            if let existing {
+                title = existing.title
+                detail = existing.detail
+                symbol = existing.systemImage
+                hasReminder = existing.reminderTime != nil
+                time = existing.reminderTime ?? DailyTask.time(9, 0)
+            }
+        }
+    }
+
+    private func field<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(CoachTheme.Text.faint)
+            content()
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                        .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
+                }
+        }
+    }
+
+    private func save() {
+        Haptics.success()
+        var task = existing ?? DailyTask(title: "", detail: "", systemImage: symbol, isComplete: false)
+        task.title = title.trimmingCharacters(in: .whitespaces)
+        task.detail = detail.trimmingCharacters(in: .whitespaces)
+        task.systemImage = symbol
+        task.reminderTime = hasReminder ? time : nil
+        onSave(task)
+        dismiss()
     }
 }

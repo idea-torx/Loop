@@ -61,14 +61,20 @@ struct DailyTask: Identifiable {
     var systemImage: String
     var isComplete: Bool
     var completedAt: Date?
+    var reminderTime: Date?
+
+    /// Today at the given hour/minute — used for reminder scheduling defaults.
+    static func time(_ hour: Int, _ minute: Int) -> Date {
+        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
+    }
 
     static let seed = [
-        DailyTask(title: "Morning weigh-in", detail: "Log weight before breakfast", systemImage: "scalemass.fill", isComplete: false),
-        DailyTask(title: "Lunch check-in", detail: "Text or photo log", systemImage: "fork.knife", isComplete: false),
-        DailyTask(title: "Dinner check-in", detail: "Keep it honest, not perfect", systemImage: "takeoutbag.and.cup.and.straw.fill", isComplete: false),
-        DailyTask(title: "Workout", detail: "Upper body strength session", systemImage: "figure.strengthtraining.traditional", isComplete: false),
-        DailyTask(title: "Steps and recovery", detail: "Close the activity gap", systemImage: "figure.walk", isComplete: false),
-        DailyTask(title: "Evening review", detail: "One sentence about what worked", systemImage: "moon.stars.fill", isComplete: false)
+        DailyTask(title: "Morning weigh-in", detail: "Log weight before breakfast", systemImage: "scalemass.fill", isComplete: false, reminderTime: time(8, 45)),
+        DailyTask(title: "Lunch check-in", detail: "Text or photo log", systemImage: "fork.knife", isComplete: false, reminderTime: time(12, 15)),
+        DailyTask(title: "Dinner check-in", detail: "Keep it honest, not perfect", systemImage: "takeoutbag.and.cup.and.straw.fill", isComplete: false, reminderTime: time(17, 0)),
+        DailyTask(title: "Workout", detail: "Today's lift — log your sets", systemImage: "figure.strengthtraining.traditional", isComplete: false, reminderTime: time(18, 30)),
+        DailyTask(title: "Steps and recovery", detail: "Close the activity gap", systemImage: "figure.walk", isComplete: false, reminderTime: nil),
+        DailyTask(title: "Evening review", detail: "One sentence about what worked", systemImage: "moon.stars.fill", isComplete: false, reminderTime: time(21, 0))
     ]
 }
 
@@ -92,6 +98,7 @@ struct MealLog: Identifiable {
     let title: String
     let calories: Int
     let protein: Int
+    var imageData: Data?
 
     static let seed = [
         MealLog(date: Date(), title: "Greek yogurt, berries, protein coffee", calories: 430, protein: 42),

@@ -39,6 +39,7 @@ final class AppState: ObservableObject {
     let gateway = SupabaseGateway()
 
     func bootstrap() {
+        gateway.loadConfiguration()
         if conversations.isEmpty {
             startNewConversation()
         }
@@ -83,14 +84,147 @@ final class AppState: ObservableObject {
         tasks[index].completedAt = tasks[index].isComplete ? Date() : nil
     }
 
+    // MARK: Editable reminders
+
+    func upsertTask(_ task: DailyTask) {
+        if let index = tasks.firstIndex(where: { $0.id == task.id }) {
+            tasks[index] = task
+        } else {
+            tasks.append(task)
+        }
+        rescheduleReminders()
+    }
+
+    func updateTask(_ task: DailyTask) {
+        guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        tasks[index] = task
+        rescheduleReminders()
+    }
+
+    func deleteTask(_ task: DailyTask) {
+        tasks.removeAll { $0.id == task.id }
+        rescheduleReminders()
+    }
+
+    func rescheduleReminders() {
+        let snapshot = tasks
+        Task { await reminderScheduler.scheduleTaskReminders(snapshot, tone: settings.notificationTone) }
+    }
+
+    // MARK: Meals
+
+    func logMeal(title: String, calories: Int, protein: Int, imageData: Data?) {
+        meals.append(MealLog(date: Date(), title: title, calories: calories, protein: protein, imageData: imageData))
+    }
+
+    var todaysMeals: [MealLog] {
+        meals.filter { Calendar.current.isDateInToday($0.date) }
+    }
+
+    var caloriesToday: Int { todaysMeals.reduce(0) { $0 + $1.calories } }
+    var proteinToday: Int { todaysMeals.reduce(0) { $0 + $1.protein } }
+
     func sendCoachMessage(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
         messages.append(CoachMessage(role: .user, text: trimmed))
         setTitleIfNeeded(from: trimmed)
+
+        // Conversational reminder management.
+        if let command = CommandParser.reminderCommand(from: trimmed) {
+            let reply = applyReminderCommand(command)
+            messages.append(CoachMessage(role: .assistant, text: reply))
+            return
+        }
+
+        // Conversational meal logging — macros evaluated by Haiku.
+        if let description = CommandParser.mealLog(from: trimmed) {
+            let macros = await logMealWithHaiku(description: description, imageData: nil)
+            if let keyword = CommandParser.mealKeyword(in: trimmed) {
+                completeTask(matching: keyword)
+            }
+            let reply = "Logged: \(macros.title) — \(macros.calories) cal, \(macros.protein)g protein. "
+                + "That puts you at \(proteinToday)g protein today (target \(PTProtocol.proteinTargetG)g)."
+            messages.append(CoachMessage(role: .assistant, text: reply))
+            return
+        }
+
         let response = await coachService.respond(to: trimmed, state: self)
         apply(response)
+    }
+
+    // MARK: Conversational actions
+
+    /// Evaluate macros via the Haiku Edge Function (falling back to a local estimate), then log the meal.
+    @discardableResult
+    func logMealWithHaiku(description: String, imageData: Data?) async -> MealMacros {
+        var macros: MealMacros?
+        if let base = gateway.configuration.projectURL,
+           let key = gateway.configuration.anonKey, !key.isEmpty {
+            macros = await SupabaseGateway.analyzeMeal(base: base, anonKey: key, description: description, imageData: imageData)
+        }
+        let resolved = macros ?? localMealEstimate(description: description)
+        logMeal(title: resolved.title, calories: resolved.calories, protein: resolved.protein, imageData: imageData)
+        return resolved
+    }
+
+    private func localMealEstimate(description: String) -> MealMacros {
+        // Offline fallback when the backend isn't configured.
+        let title = description.split(separator: ",").first.map(String.init)?
+            .trimmingCharacters(in: .whitespaces) ?? "Meal"
+        return MealMacros(title: title.isEmpty ? "Meal" : title, calories: 550, protein: 45)
+    }
+
+    private func completeTask(matching keyword: String) {
+        if let index = taskIndex(matching: keyword) {
+            tasks[index].isComplete = true
+            tasks[index].completedAt = Date()
+        }
+    }
+
+    /// Fuzzy, hyphen-insensitive task lookup: every keyword word must appear in the title.
+    private func taskIndex(matching keyword: String) -> Int? {
+        let needles = keyword.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .split(separator: " ")
+            .map(String.init)
+            .filter { $0.count > 1 }
+        guard !needles.isEmpty else { return nil }
+        return tasks.firstIndex { task in
+            let hay = task.title.lowercased().replacingOccurrences(of: "-", with: " ")
+            return needles.allSatisfy { hay.contains($0) }
+        }
+    }
+
+    private func applyReminderCommand(_ command: CommandParser.ReminderCommand) -> String {
+        switch command {
+        case .add(let title, let time):
+            let task = DailyTask(title: title, detail: "Added via coach", systemImage: "bell.fill", isComplete: false, reminderTime: time)
+            tasks.append(task)
+            rescheduleReminders()
+            if let time {
+                return "Added \"\(title)\" at \(time.formatted(date: .omitted, time: .shortened))."
+            }
+            return "Added \"\(title)\" to today's list."
+
+        case .move(let keyword, let time):
+            guard let index = taskIndex(matching: keyword) else {
+                return "I couldn't find a reminder matching \"\(keyword)\". Try the exact name from Today."
+            }
+            tasks[index].reminderTime = time
+            rescheduleReminders()
+            return "Moved \(tasks[index].title) to \(time.formatted(date: .omitted, time: .shortened))."
+
+        case .remove(let keyword):
+            guard let index = taskIndex(matching: keyword) else {
+                return "I couldn't find a reminder matching \"\(keyword)\"."
+            }
+            let title = tasks[index].title
+            tasks.remove(at: index)
+            rescheduleReminders()
+            return "Removed \(title) from today's list."
+        }
     }
 
     func sendWorkoutMessage(_ text: String) async {
