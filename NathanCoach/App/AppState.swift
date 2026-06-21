@@ -38,6 +38,35 @@ final class AppState: ObservableObject {
     let metricsService = MetricsService()
     let gateway = SupabaseGateway()
 
+    private var session: SupabaseSession?
+
+    /// Ensure a valid anonymous Supabase session, restoring/refreshing across launches.
+    /// Returns nil when the backend isn't configured (app stays in local mode).
+    @discardableResult
+    func ensureSession() async -> SupabaseSession? {
+        guard let base = gateway.configuration.projectURL,
+              let key = gateway.configuration.anonKey, !key.isEmpty else { return nil }
+
+        if let current = session, current.expiresAt > Date() { return current }
+
+        if let stored = UserDefaults.standard.string(forKey: "sb_refresh_token"),
+           let refreshed = await SupabaseGateway.refresh(base: base, anonKey: key, refreshToken: stored) {
+            store(refreshed)
+            return refreshed
+        }
+        if let fresh = await SupabaseGateway.signInAnonymously(base: base, anonKey: key) {
+            store(fresh)
+            return fresh
+        }
+        return nil
+    }
+
+    private func store(_ newSession: SupabaseSession) {
+        session = newSession
+        UserDefaults.standard.set(newSession.refreshToken, forKey: "sb_refresh_token")
+        UserDefaults.standard.set(newSession.userID, forKey: "sb_user_id")
+    }
+
     func bootstrap() {
         gateway.loadConfiguration()
         if conversations.isEmpty {
@@ -160,9 +189,10 @@ final class AppState: ObservableObject {
     @discardableResult
     func logMealWithHaiku(description: String, imageData: Data?) async -> MealMacros {
         var macros: MealMacros?
-        if let base = gateway.configuration.projectURL,
-           let key = gateway.configuration.anonKey, !key.isEmpty {
-            macros = await SupabaseGateway.analyzeMeal(base: base, anonKey: key, description: description, imageData: imageData)
+        if let creds = await ensureSession(),
+           let base = gateway.configuration.projectURL,
+           let key = gateway.configuration.anonKey {
+            macros = await SupabaseGateway.analyzeMeal(base: base, anonKey: key, token: creds.accessToken, description: description, imageData: imageData)
         }
         let resolved = macros ?? localMealEstimate(description: description)
         logMeal(title: resolved.title, calories: resolved.calories, protein: resolved.protein, imageData: imageData)
