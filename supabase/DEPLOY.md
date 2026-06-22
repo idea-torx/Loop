@@ -19,25 +19,47 @@ Authentication → **Sign In / Providers** → enable **Anonymous sign-ins** →
 ```sh
 brew install supabase/tap/supabase
 supabase login                         # opens a browser
+```
+
+## 4. Initialize/link this repo
+
+Run these from the repo root, not from `supabase/` or `supabase/migrations/`:
+
+```sh
+cd /Users/leofelix/Documents/Nathan-App
+supabase init                          # creates supabase/config.toml if missing
 supabase link --project-ref <YOUR_REF> # from step 1
 ```
 
-## 4. Apply the database schema
+Confirm the CLI can see the linked project:
 
 ```sh
+supabase projects list
+```
+
+If you run `supabase db push` from inside `supabase/migrations/`, the CLI may not use this
+repo's migration folder or linked project. The dashboard will then show no new tables.
+
+## 5. Apply the database schema
+
+```sh
+cd /Users/leofelix/Documents/Nathan-App
 supabase db push
 ```
 
-This runs `supabase/migrations/0001_initial_schema.sql` (tables + row-level security).
+This runs all files in `supabase/migrations/`:
 
-## 5. Set the function secrets
+- `0001_initial_schema.sql` creates the core tables and row-level security policies.
+- `0002_task_instance_reminder_fields.sql` adds task ordering and reminder time fields used by the iOS app.
+
+## 6. Set the function secrets
 
 ```sh
 supabase secrets set ANTHROPIC_API_KEY=sk-ant-...   # your Anthropic key — stays server-side
 supabase secrets set ANTHROPIC_MODEL=claude-haiku-4-5
 ```
 
-## 6. Deploy the Edge Functions
+## 7. Deploy the Edge Functions
 
 ```sh
 supabase functions deploy analyze-meal
@@ -48,7 +70,7 @@ supabase functions deploy daily-plan
 
 (They verify the user's JWT by default; the app sends the anonymous user's token.)
 
-## 7. Point the app at Supabase
+## 8. Point the app at Supabase
 
 In Xcode: **Product → Scheme → Edit Scheme… → Run → Arguments → Environment Variables**,
 add:
@@ -65,6 +87,7 @@ Run the app. Settings → "Cloud & AI" should read **Cloud sync ready · Supabas
 
 ## Verify
 
-- Log a meal (Trends → Log a meal, or tell the coach "lunch was …") → it should persist
-  and survive an app relaunch.
-- Check the dashboard → **Table editor** → `meals` / `weigh_ins` / `coach_messages` for rows.
+- Log a meal, send a coach message, complete a task, add a weigh-in, and log a workout set.
+- Relaunch the app → cloud-backed data should reload instead of returning to only seed data.
+- Check the dashboard → **Table editor** → `meals`, `weigh_ins`, `coach_messages`,
+  `task_instances`, `workout_sessions`, `exercise_sets`, and `weekly_reviews` for rows.

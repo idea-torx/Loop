@@ -1,18 +1,15 @@
+import PhotosUI
 import SwiftUI
+import UIKit
 
 struct CoachView: View {
     @EnvironmentObject private var appState: AppState
     @State private var draft = ""
     @State private var isResponding = false
     @State private var showsDrawer = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var showsCamera = false
     @FocusState private var isFocused: Bool
-
-    private let quickPrompts: [(label: String, prefill: String, icon: String)] = [
-        ("Weigh-in", "I weighed in at ", "scalemass.fill"),
-        ("Log lunch", "Lunch was ", "fork.knife"),
-        ("Earlier nudge", "Move my gym nudge earlier", "clock.arrow.circlepath"),
-        ("Review today", "Review today so far", "sparkles")
-    ]
 
     var body: some View {
         ZStack {
@@ -24,15 +21,17 @@ struct CoachView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 16) {
+                            if appState.messages.isEmpty {
+                                emptyOpenChatState
+                            }
                             ForEach(appState.messages) { message in
                                 MessageBubble(message: message)
                                     .id(message.id)
                             }
                             if isResponding {
                                 HStack(spacing: 10) {
-                                    coachOrb(size: 30)
                                     TypingIndicator()
-                                    Spacer(minLength: 54)
+                                    Spacer(minLength: 48)
                                 }
                                 .id("typing")
                             }
@@ -42,17 +41,32 @@ struct CoachView: View {
                         .padding(.bottom, 24)
                     }
                     .scrollIndicators(.hidden)
+                    .scrollDismissesKeyboard(.interactively)
+                    .simultaneousGesture(TapGesture().onEnded { isFocused = false })
                     .onChange(of: appState.messages.count) { _, _ in scrollToEnd(proxy) }
                     .onChange(of: isResponding) { _, _ in scrollToEnd(proxy) }
                     .onChange(of: appState.activeConversationID) { _, _ in scrollToEnd(proxy) }
                 }
 
-                quickPromptRow
                 composer
                     .padding(.horizontal, 14)
-                    .padding(.bottom, 96)
+                    .padding(.bottom, composerBottomPadding)
+                    .animation(.snappy(duration: 0.22), value: isFocused)
             }
-            .background(CoachTheme.background)
+            .background(Color(red: 0.07, green: 0.07, blue: 0.075))
+            .sheet(isPresented: $showsCamera) {
+                CameraCaptureView { data in
+                    sendMealImage(data)
+                }
+                .ignoresSafeArea()
+            }
+            .onChange(of: photoItem) { _, item in
+                Task {
+                    guard let data = try? await item?.loadTransferable(type: Data.self) else { return }
+                    await MainActor.run { photoItem = nil }
+                    await MainActor.run { sendMealImage(data) }
+                }
+            }
 
             ConversationDrawer(isOpen: $showsDrawer)
         }
@@ -68,6 +82,21 @@ struct CoachView: View {
         }
     }
 
+    private var emptyOpenChatState: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Ask anything.")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(CoachTheme.Text.primary)
+            Text("Training swaps, meal choices, soreness, motivation, plan tweaks, or a straight fitness question.")
+                .font(.subheadline)
+                .foregroundStyle(CoachTheme.Text.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 36)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     // MARK: Compact top bar
 
     private var topBar: some View {
@@ -75,7 +104,7 @@ struct CoachView: View {
             HStack(spacing: 8) {
                 Circle().fill(.green).frame(width: 6, height: 6)
                 Text(appState.activeConversation?.title ?? "Coach")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .font(.system(size: 16, weight: .medium))
                     .lineLimit(1)
             }
             .frame(maxWidth: 200)
@@ -105,77 +134,81 @@ struct CoachView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(CoachTheme.accent)
+                .foregroundStyle(CoachTheme.Text.muted)
                 .frame(width: 40, height: 40)
-                .glassEffect(.regular.interactive(), in: Circle())
-                .overlay { Circle().stroke(CoachTheme.Stroke.hairline, lineWidth: 1) }
+                .background(Color.white.opacity(0.06), in: Circle())
         }
         .buttonStyle(.pressable)
-    }
-
-    private func coachOrb(size: CGFloat) -> some View {
-        TimelineView(.animation) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            let pulse = 1 + 0.04 * sin(t * 2)
-            ZStack {
-                Circle()
-                    .fill(
-                        AngularGradient(
-                            colors: [CoachTheme.rust, CoachTheme.ember, CoachTheme.flame, CoachTheme.rust],
-                            center: .center
-                        )
-                    )
-                    .scaleEffect(pulse)
-                    .shadow(color: CoachTheme.ember.opacity(0.5), radius: size * 0.22, y: 4)
-                Image(systemName: "sparkles")
-                    .font(.system(size: size * 0.42, weight: .semibold))
-                    .foregroundStyle(.black.opacity(0.85))
-            }
-            .frame(width: size, height: size)
-        }
-    }
-
-    // MARK: Quick prompts
-
-    private var quickPromptRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(quickPrompts, id: \.label) { prompt in
-                    GlassPillButton(title: prompt.label, systemImage: prompt.icon) {
-                        Haptics.soft()
-                        draft = prompt.prefill
-                        isFocused = true
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-        }
     }
 
     // MARK: Composer
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
+            Menu {
+                Button {
+                    Haptics.light()
+                    isFocused = false
+                    showsCamera = true
+                } label: {
+                    Label("Camera", systemImage: "camera")
+                }
+                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    Label("Photo Library", systemImage: "photo")
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(CoachTheme.Text.muted)
+                    .frame(width: 34, height: 36)
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 10)
+
             TextField("Message your coach…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .focused($isFocused)
                 .lineLimit(1...5)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 13)
-                .glassEffect(.regular, in: Capsule())
-                .overlay {
-                    Capsule().stroke(CoachTheme.accent.opacity(isFocused ? 0.5 : 0.12), lineWidth: 1)
+                .padding(.vertical, 12)
+                .submitLabel(.send)
+                .onSubmit(send)
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") {
+                            isFocused = false
+                        }
+                    }
                 }
 
-            AccentButton(systemImage: "arrow.up", isEnabled: !trimmedDraft.isEmpty) {
+            Button {
                 send()
+            } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(trimmedDraft.isEmpty ? CoachTheme.Text.faint : .black)
+                    .frame(width: 32, height: 32)
+                    .background(trimmedDraft.isEmpty ? Color.white.opacity(0.08) : CoachTheme.Text.primary, in: Circle())
             }
+            .disabled(trimmedDraft.isEmpty)
+            .buttonStyle(.plain)
+            .padding(.trailing, 8)
+        }
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(isFocused ? 0.18 : 0.08), lineWidth: 1)
         }
     }
 
     private var trimmedDraft: String {
         draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var composerBottomPadding: CGFloat {
+        isFocused ? 8 : 96
     }
 
     private func send() {
@@ -186,6 +219,17 @@ struct CoachView: View {
         isResponding = true
         Task {
             await appState.sendCoachMessage(message)
+            isResponding = false
+        }
+    }
+
+    private func sendMealImage(_ data: Data) {
+        let note = trimmedDraft.isEmpty ? nil : trimmedDraft
+        Haptics.light()
+        isResponding = true
+        Task {
+            await appState.sendMealImageToHaiku(imageData: data, note: note)
+            draft = ""
             isResponding = false
         }
     }
@@ -227,7 +271,7 @@ private struct ConversationDrawer: View {
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(CoachTheme.Text.muted)
                         .frame(width: 32, height: 32)
-                        .glassEffect(.regular.interactive(), in: Circle())
+                        .background(Color.white.opacity(0.06), in: Circle())
                 }
                 .buttonStyle(.pressable)
             }
@@ -245,14 +289,10 @@ private struct ConversationDrawer: View {
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                     Spacer()
                 }
-                .foregroundStyle(.black)
+                .foregroundStyle(CoachTheme.Text.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
-                .background(
-                    LinearGradient(colors: [CoachTheme.flame, CoachTheme.ember],
-                                   startPoint: .leading, endPoint: .trailing),
-                    in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
-                )
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
             }
             .buttonStyle(.pressable)
 
@@ -328,70 +368,113 @@ private struct MessageBubble: View {
     private var isUser: Bool { message.role == .user }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        HStack(alignment: .top, spacing: 9) {
             if isUser {
                 Spacer(minLength: 48)
             } else {
-                assistantAvatar
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.46))
+                    .frame(width: 28, height: 28)
+                    .background(Color.white.opacity(0.045), in: Circle())
+                    .padding(.top, 4)
             }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
-                Text(message.text)
+                MarkdownText(message.text)
                     .font(.body)
-                    .lineSpacing(2)
-                    .foregroundStyle(isUser ? .black : CoachTheme.Text.primary)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background {
-                        if isUser {
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [CoachTheme.flame, CoachTheme.ember],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                        } else {
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .fill(CoachTheme.Fill.soft)
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                        .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
-                                }
-                        }
+                    .lineSpacing(3)
+                    .foregroundStyle(Color.white.opacity(0.86))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(isUser ? Color.white.opacity(0.085) : Color.white.opacity(0.045))
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.white.opacity(isUser ? 0.075 : 0.055), lineWidth: 1)
                     }
 
                 Text(message.createdAt.formatted(.dateTime.hour().minute()))
                     .font(.caption2)
-                    .foregroundStyle(CoachTheme.Text.faint)
-                    .padding(.horizontal, 4)
+                    .foregroundStyle(Color.white.opacity(0.32))
+                    .padding(.horizontal, isUser ? 4 : 0)
             }
+            .frame(maxWidth: isUser ? 280 : 310, alignment: isUser ? .trailing : .leading)
 
             if isUser {
-                userAvatar
+                EmptyView()
             } else {
-                Spacer(minLength: 48)
+                Spacer(minLength: 28)
             }
         }
-        .transition(.move(edge: isUser ? .trailing : .leading).combined(with: .opacity))
+        .transition(.opacity)
+    }
+}
+
+private struct MarkdownText: View {
+    let source: String
+
+    init(_ source: String) {
+        self.source = source
     }
 
-    private var assistantAvatar: some View {
-        ZStack {
-            Circle().fill(CoachTheme.glow)
-            Image(systemName: "sparkle")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(CoachTheme.accent)
+    var body: some View {
+        Text(rendered)
+            .textSelection(.enabled)
+    }
+
+    private var rendered: AttributedString {
+        if let attributed = try? AttributedString(
+            markdown: source,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) {
+            return attributed
         }
-        .frame(width: 30, height: 30)
+        return AttributedString(source)
+    }
+}
+
+// MARK: - Camera capture
+
+private struct CameraCaptureView: UIViewControllerRepresentable {
+    let onCapture: (Data) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        picker.allowsEditing = false
+        return picker
     }
 
-    private var userAvatar: some View {
-        Text("L")
-            .font(.caption.weight(.bold))
-            .foregroundStyle(.black)
-            .frame(width: 30, height: 30)
-            .background(CoachTheme.ember, in: Circle())
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCapture: onCapture, dismiss: dismiss)
+    }
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let onCapture: (Data) -> Void
+        let dismiss: DismissAction
+
+        init(onCapture: @escaping (Data) -> Void, dismiss: DismissAction) {
+            self.onCapture = onCapture
+            self.dismiss = dismiss
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage,
+               let data = image.jpegData(compressionQuality: 0.82) {
+                onCapture(data)
+            }
+            dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            dismiss()
+        }
     }
 }

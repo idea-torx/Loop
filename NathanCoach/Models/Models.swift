@@ -30,9 +30,10 @@ struct CoachMessage: Identifiable {
     }
 
     let id = UUID()
+    var cloudID: String? = nil
     let role: Role
     let text: String
-    let createdAt = Date()
+    var createdAt = Date()
 
     static let seed = [
         CoachMessage(
@@ -56,6 +57,7 @@ struct Conversation: Identifiable {
 
 struct DailyTask: Identifiable {
     let id = UUID()
+    var cloudID: String? = nil
     var title: String
     var detail: String
     var systemImage: String
@@ -80,6 +82,7 @@ struct DailyTask: Identifiable {
 
 struct WeighIn: Identifiable {
     let id = UUID()
+    var cloudID: String? = nil
     let date: Date
     let pounds: Double
 
@@ -94,10 +97,11 @@ struct WeighIn: Identifiable {
 
 struct MealLog: Identifiable {
     let id = UUID()
+    var cloudID: String? = nil
     let date: Date
-    let title: String
-    let calories: Int
-    let protein: Int
+    var title: String
+    var calories: Int
+    var protein: Int
     var imageData: Data?
 
     static let seed = [
@@ -108,9 +112,11 @@ struct MealLog: Identifiable {
 
 struct WorkoutSession: Identifiable {
     let id = UUID()
+    var cloudID: String? = nil
     var date: Date
     var title: String
     var focus: String
+    var coachNotes: String = ""
     var sets: [ExerciseSet]
     var isComplete: Bool
 
@@ -135,6 +141,7 @@ struct WorkoutSession: Identifiable {
 
 struct ExerciseSet: Identifiable {
     let id = UUID()
+    var cloudID: String? = nil
     var exercise: String
     var reps: Int
     var weight: Int
@@ -142,6 +149,7 @@ struct ExerciseSet: Identifiable {
 
 struct WorkoutDayPlan: Identifiable {
     let id = UUID()
+    var cloudID: String? = nil
     var date: Date
     var title: String
     var focus: String
@@ -163,15 +171,53 @@ struct WorkoutDayPlan: Identifiable {
 
     static let seed: [WorkoutDayPlan] = {
         let calendar = Calendar.current
-        let start = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: Date())
+        let weekday = calendar.component(.weekday, from: today)
+        let daysSinceMonday = (weekday + 5) % 7
+        let start = calendar.date(byAdding: .day, value: -daysSinceMonday, to: today) ?? today
         let templates = [
-            ("Upper Strength", "Press, pull, arms", true),
-            ("Steps + Mobility", "Easy movement and recovery", false),
-            ("Lower Strength", "Squat pattern, hinge, core", true),
-            ("Recovery Check", "Walk, stretch, sleep target", false),
-            ("Full Body", "Compounds plus accessories", true),
-            ("Conditioning", "Zone 2 or incline walk", true),
-            ("Weekly Reset", "Review, prep, light movement", false)
+            (
+                "Push",
+                "Zones: chest, shoulders, triceps",
+                "Push day: press patterns first, then shoulder and triceps accessories. First push exposure of the week.",
+                true
+            ),
+            (
+                "Pull",
+                "Zones: back, lats, rear delts, biceps",
+                "Pull day: rows, vertical pulls, rear delts, and curls. First pull exposure of the week.",
+                true
+            ),
+            (
+                "Legs + Abs",
+                "Zones: quads, hamstrings, glutes, calves, core",
+                "Leg day also carries abs: reverse crunches and rope cable crunches. Keep bracing crisp and prioritize hypertrophy work.",
+                true
+            ),
+            (
+                "Push",
+                "Zones: chest, shoulders, triceps",
+                "Second push exposure. Keep pressing quality high, then finish with shoulders and triceps.",
+                true
+            ),
+            (
+                "Pull",
+                "Zones: back, lats, rear delts, biceps",
+                "Second pull exposure. Rows, lats, rear delts, and curls.",
+                true
+            ),
+            (
+                "Legs + Abs",
+                "Zones: quads, hamstrings, glutes, calves, core",
+                "Second leg exposure. Abs reminders: reverse crunches and rope cable crunches.",
+                true
+            ),
+            (
+                "Big Cardio",
+                "Zones: aerobic base, legs, lungs, recovery capacity",
+                "Sunday is the big cardio day: bike, hike, or run. Keep it sustainable and make it count.",
+                true
+            )
         ]
 
         return templates.enumerated().map { index, template in
@@ -179,9 +225,9 @@ struct WorkoutDayPlan: Identifiable {
                 date: calendar.date(byAdding: .day, value: index, to: start) ?? start,
                 title: template.0,
                 focus: template.1,
-                coachNotes: template.2 ? "Configured by the coach. Tell me what equipment, soreness, or schedule constraints changed." : "Keep this light unless the week needs a reshuffle.",
-                isTrainingDay: template.2,
-                sets: index == 0 ? WorkoutSession.seed[0].sets : []
+                coachNotes: template.2,
+                isTrainingDay: template.3,
+                sets: []
             )
         }
     }()
@@ -221,6 +267,8 @@ enum CoachAppUpdate {
     case taskCompleted(keyword: String)
     case weighIn(Double)
     case meal(title: String, calories: Int, protein: Int)
+    case mealUpdate(id: String?, keyword: String?, title: String?, calories: Int?, protein: Int?)
+    case mealDelete(id: String?, keyword: String?)
     case notificationTone(String)
     case gymDays(String)
     case mealTiming(String)

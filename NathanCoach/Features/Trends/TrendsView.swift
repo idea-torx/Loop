@@ -6,7 +6,15 @@ struct TrendsView: View {
     @EnvironmentObject private var appState: AppState
     @State private var selectedWeighIn: WeighIn?
     @State private var showsMealEntry = false
+    @State private var editingMeal: EditableMeal?
     @State private var appeared = false
+
+    struct EditableMeal: Identifiable {
+        let id: MealLog.ID
+        var title: String
+        var calories: Int
+        var protein: Int
+    }
 
     private var rollingWeights: [WeighIn] {
         appState.metricsService.rollingAverage(points: appState.weighIns)
@@ -44,6 +52,15 @@ struct TrendsView: View {
                 await appState.logMealWithHaiku(description: description, imageData: imageData)
             }
             .preferredColorScheme(.dark)
+        }
+        .sheet(item: $editingMeal) { draft in
+            MealEditSheet(draft: draft) { updated in
+                Haptics.success()
+                appState.updateMeal(updated.id, title: updated.title, calories: updated.calories, protein: updated.protein)
+            }
+            .preferredColorScheme(.dark)
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
         }
         .onAppear { withAnimation(.easeOut(duration: 0.6)) { appeared = true } }
     }
@@ -291,6 +308,21 @@ struct TrendsView: View {
             Text(meal.date.formatted(date: .omitted, time: .shortened))
                 .font(.caption2)
                 .foregroundStyle(CoachTheme.Text.faint)
+            Menu {
+                Button("Edit meal", systemImage: "pencil") {
+                    editingMeal = EditableMeal(id: meal.id, title: meal.title, calories: meal.calories, protein: meal.protein)
+                }
+                Button("Delete meal", systemImage: "trash", role: .destructive) {
+                    Haptics.soft()
+                    appState.deleteMeal(meal.id)
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(CoachTheme.Text.muted)
+                    .frame(width: 30, height: 30)
+                    .background(CoachTheme.Fill.subtle, in: Circle())
+            }
         }
         .padding(12)
         .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
@@ -337,6 +369,54 @@ struct TrendsView: View {
         .padding(22)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassPanel(radius: CoachTheme.Radius.xl)
+    }
+}
+
+private struct MealEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: TrendsView.EditableMeal
+    let onSave: (TrendsView.EditableMeal) -> Void
+
+    init(draft: TrendsView.EditableMeal, onSave: @escaping (TrendsView.EditableMeal) -> Void) {
+        _draft = State(initialValue: draft)
+        self.onSave = onSave
+    }
+
+    private var isValid: Bool {
+        !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                TextField("Meal", text: $draft.title, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...3)
+                    .padding(14)
+                    .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+
+                Stepper("Calories: \(draft.calories)", value: $draft.calories, in: 0...5000, step: 25)
+                Stepper("Protein: \(draft.protein)g", value: $draft.protein, in: 0...300, step: 1)
+
+                Spacer()
+            }
+            .padding(20)
+            .background(CoachTheme.background.ignoresSafeArea())
+            .navigationTitle("Edit Meal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(draft)
+                        dismiss()
+                    }
+                    .disabled(!isValid)
+                }
+            }
+        }
     }
 }
 

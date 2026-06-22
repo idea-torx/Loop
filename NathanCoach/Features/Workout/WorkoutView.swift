@@ -10,8 +10,27 @@ struct WorkoutView: View {
     @State private var exercise = "Bench Press"
     @State private var reps = 5
     @State private var weight = 185
+    @State private var expandedExerciseKeys: Set<String> = []
+    @State private var editingSet: EditableSet?
 
     enum LoggerMode: String, CaseIterable { case talk = "Talk", manual = "Manual", configure = "Configure" }
+
+    struct EditableSet: Identifiable {
+        let id: ExerciseSet.ID
+        var exercise: String
+        var reps: Int
+        var weight: Int
+    }
+
+    struct ExerciseGroup: Identifiable {
+        let id: String
+        let exercise: String
+        let sets: [ExerciseSet]
+
+        var volume: Int {
+            sets.reduce(0) { $0 + ($1.reps * $1.weight) }
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -20,8 +39,8 @@ struct WorkoutView: View {
                 weekStrip
 
                 if let workout = appState.selectedWorkoutDay {
-                    heroSession(workout)
                     loggerSection
+                    heroSession(workout)
                     setsList(workout)
                 }
             }
@@ -31,6 +50,14 @@ struct WorkoutView: View {
         }
         .background(CoachTheme.background)
         .scrollIndicators(.hidden)
+        .sheet(item: $editingSet) { draft in
+            SetEditorSheet(draft: draft) { updated in
+                Haptics.success()
+                appState.updateSet(updated.id, exercise: updated.exercise, reps: updated.reps, weight: updated.weight)
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     // MARK: Header
@@ -56,8 +83,10 @@ struct WorkoutView: View {
                     dayCard(day)
                 }
             }
-            .padding(.vertical, 2)
+            .padding(.horizontal, 2)
+            .padding(.vertical, 4)
         }
+        .scrollClipDisabled()
     }
 
     private func dayCard(_ day: WorkoutDayPlan) -> some View {
@@ -151,11 +180,7 @@ struct WorkoutView: View {
     }
 
     private var talkLogger: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("e.g. \"bench 185 x 5, 5, 4\" or \"rows 145 x 8, curls 30 x 12\".")
-                .font(.caption)
-                .foregroundStyle(CoachTheme.Text.muted)
-
+        return VStack(alignment: .leading, spacing: 12) {
             TextField("What did you just do?", text: $workoutNote, axis: .vertical)
                 .lineLimit(3...7)
                 .padding(12)
@@ -215,11 +240,7 @@ struct WorkoutView: View {
     }
 
     private var configureLogger: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Reshape this day — \"make Friday lower body\" or \"swap this for recovery\".")
-                .font(.caption)
-                .foregroundStyle(CoachTheme.Text.muted)
-
+        return VStack(alignment: .leading, spacing: 12) {
             TextField("Tell the coach what this day should become", text: $configurationNote, axis: .vertical)
                 .lineLimit(2...5)
                 .padding(12)
@@ -255,8 +276,10 @@ struct WorkoutView: View {
     // MARK: Sets list
 
     private func setsList(_ workout: WorkoutDayPlan) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SectionHeader(title: "Tracked sets", subtitle: workout.sets.isEmpty ? "No sets yet" : "\(workout.sets.count) logged")
+        let groups = exerciseGroups(for: workout.sets)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Tracked sets", subtitle: workout.sets.isEmpty ? "No sets yet" : "\(groups.count) exercises, \(workout.sets.count) sets")
 
             if workout.sets.isEmpty {
                 Text("Log your first set above and it'll show here.")
@@ -265,26 +288,167 @@ struct WorkoutView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 8)
             } else {
-                ForEach(Array(workout.sets.enumerated()), id: \.element.id) { index, set in
-                    HStack(spacing: 14) {
-                        Text("\(index + 1)")
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(CoachTheme.accent)
-                            .frame(width: 26, height: 26)
-                            .background(CoachTheme.glow, in: Circle())
-                        Text(set.exercise)
+                ForEach(groups) { group in
+                    exerciseGroupRow(group)
+                }
+            }
+        }
+    }
+
+    private func exerciseGroupRow(_ group: ExerciseGroup) -> some View {
+        let isExpanded = expandedExerciseKeys.contains(group.id)
+
+        return VStack(spacing: 0) {
+            Button {
+                Haptics.soft()
+                withAnimation(.snappy(duration: 0.25)) {
+                    if isExpanded {
+                        expandedExerciseKeys.remove(group.id)
+                    } else {
+                        expandedExerciseKeys.insert(group.id)
+                    }
+                }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(CoachTheme.accent)
+                        .frame(width: 24, height: 24)
+                        .background(CoachTheme.glow, in: Circle())
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(group.exercise)
                             .font(.system(size: 16, weight: .semibold, design: .rounded))
-                        Spacer()
-                        Text("\(set.weight) lb × \(set.reps)")
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
-                            .foregroundStyle(CoachTheme.accent)
+                            .foregroundStyle(CoachTheme.Text.primary)
+                        Text("\(group.sets.count) set\(group.sets.count == 1 ? "" : "s") · \(group.volume.formatted()) lb volume")
+                            .font(.caption)
+                            .foregroundStyle(CoachTheme.Text.muted)
                     }
-                    .padding(14)
-                    .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
-                            .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
+
+                    Spacer()
+
+                    Text(group.sets.map { "\($0.weight)×\($0.reps)" }.joined(separator: ", "))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(CoachTheme.accent)
+                        .lineLimit(1)
+                }
+                .padding(14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(spacing: 8) {
+                    ForEach(Array(group.sets.enumerated()), id: \.element.id) { index, set in
+                        setDetailRow(set, setNumber: index + 1)
                     }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
+        }
+    }
+
+    private func setDetailRow(_ set: ExerciseSet, setNumber: Int) -> some View {
+        HStack(spacing: 12) {
+            Text("Set \(setNumber)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(CoachTheme.Text.muted)
+                .frame(width: 48, alignment: .leading)
+
+            Text("\(set.weight) lb × \(set.reps)")
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(CoachTheme.Text.primary)
+
+            Spacer()
+
+            Menu {
+                Button("Edit set", systemImage: "pencil") {
+                    editingSet = EditableSet(id: set.id, exercise: set.exercise, reps: set.reps, weight: set.weight)
+                }
+                Button("Delete set", systemImage: "trash", role: .destructive) {
+                    Haptics.soft()
+                    appState.deleteSet(set.id)
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(CoachTheme.Text.muted)
+                    .frame(width: 32, height: 32)
+                    .background(CoachTheme.Fill.soft, in: Circle())
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: CoachTheme.Radius.sm, style: .continuous))
+    }
+
+    private func exerciseGroups(for sets: [ExerciseSet]) -> [ExerciseGroup] {
+        var order: [String] = []
+        var grouped: [String: [ExerciseSet]] = [:]
+        var displayNames: [String: String] = [:]
+
+        for set in sets {
+            let key = normalizedExerciseName(set.exercise)
+            if grouped[key] == nil {
+                order.append(key)
+                displayNames[key] = set.exercise
+            }
+            grouped[key, default: []].append(set)
+        }
+
+        return order.compactMap { key in
+            guard let sets = grouped[key], let exercise = displayNames[key] else { return nil }
+            return ExerciseGroup(id: key, exercise: exercise, sets: sets)
+        }
+    }
+
+    private func normalizedExerciseName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
+private struct SetEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: WorkoutView.EditableSet
+    let onSave: (WorkoutView.EditableSet) -> Void
+
+    init(draft: WorkoutView.EditableSet, onSave: @escaping (WorkoutView.EditableSet) -> Void) {
+        _draft = State(initialValue: draft)
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                TextField("Exercise", text: $draft.exercise)
+                    .textFieldStyle(.roundedBorder)
+
+                Stepper("Reps: \(draft.reps)", value: $draft.reps, in: 1...50)
+                Stepper("Weight: \(draft.weight) lb", value: $draft.weight, in: 0...800, step: 5)
+
+                Spacer()
+            }
+            .padding(20)
+            .background(CoachTheme.background)
+            .navigationTitle("Edit Set")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSave(draft)
+                        dismiss()
+                    }
+                    .disabled(draft.exercise.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }

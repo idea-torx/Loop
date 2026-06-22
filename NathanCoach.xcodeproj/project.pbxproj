@@ -3,45 +3,47 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		01A000000000000000000001 /* NathanCoachApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000001 /* NathanCoachApp.swift */; };
-		01A000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000002 /* ContentView.swift */; };
-		01A000000000000000000003 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000003 /* AppState.swift */; };
-		01A000000000000000000004 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000004 /* Models.swift */; };
-		01A000000000000000000005 /* CoachService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000005 /* CoachService.swift */; };
-		01A000000000000000000006 /* ReminderScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000006 /* ReminderScheduler.swift */; };
-		01A000000000000000000007 /* HealthKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000007 /* HealthKitService.swift */; };
-		01A000000000000000000008 /* MetricsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000008 /* MetricsService.swift */; };
-		01A000000000000000000009 /* SupabaseGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000009 /* SupabaseGateway.swift */; };
-		01A00000000000000000000A /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000A /* Theme.swift */; };
-		01A00000000000000000000B /* TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000B /* TodayView.swift */; };
-		01A00000000000000000000C /* CoachView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000C /* CoachView.swift */; };
-		01A00000000000000000000D /* WorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000D /* WorkoutView.swift */; };
-		01A00000000000000000000E /* TrendsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000E /* TrendsView.swift */; };
-		01A00000000000000000000F /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000F /* SettingsView.swift */; };
+		01A000000000000000000001 /* NathanCoach/App/NathanCoachApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000001 /* NathanCoach/App/NathanCoachApp.swift */; };
+		01A000000000000000000002 /* NathanCoach/App/ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000002 /* NathanCoach/App/ContentView.swift */; };
+		01A000000000000000000003 /* NathanCoach/App/AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000003 /* NathanCoach/App/AppState.swift */; };
+		01A000000000000000000004 /* NathanCoach/Models/Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000004 /* NathanCoach/Models/Models.swift */; };
+		01A000000000000000000005 /* NathanCoach/Services/CoachService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000005 /* NathanCoach/Services/CoachService.swift */; };
+		01A000000000000000000006 /* NathanCoach/Services/ReminderScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000006 /* NathanCoach/Services/ReminderScheduler.swift */; };
+		01A000000000000000000007 /* NathanCoach/Services/HealthKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000007 /* NathanCoach/Services/HealthKitService.swift */; };
+		01A000000000000000000008 /* NathanCoach/Services/MetricsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000008 /* NathanCoach/Services/MetricsService.swift */; };
+		01A000000000000000000009 /* NathanCoach/Services/SupabaseGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000009 /* NathanCoach/Services/SupabaseGateway.swift */; };
+		01A00000000000000000000A /* NathanCoach/Theme/Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000A /* NathanCoach/Theme/Theme.swift */; };
+		01A00000000000000000000B /* NathanCoach/Features/Today/TodayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000B /* NathanCoach/Features/Today/TodayView.swift */; };
+		01A00000000000000000000C /* NathanCoach/Features/Coach/CoachView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000C /* NathanCoach/Features/Coach/CoachView.swift */; };
+		01A00000000000000000000D /* NathanCoach/Features/Workout/WorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000D /* NathanCoach/Features/Workout/WorkoutView.swift */; };
+		01A00000000000000000000E /* NathanCoach/Features/Trends/TrendsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000E /* NathanCoach/Features/Trends/TrendsView.swift */; };
+		01A00000000000000000000F /* NathanCoach/Features/Settings/SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01B00000000000000000000F /* NathanCoach/Features/Settings/SettingsView.swift */; };
+		01A000000000000000000012 /* NathanCoach/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 01B000000000000000000012 /* NathanCoach/Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		01B000000000000000000001 /* NathanCoachApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/App/NathanCoachApp.swift; sourceTree = SOURCE_ROOT; };
-		01B000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/App/ContentView.swift; sourceTree = SOURCE_ROOT; };
-		01B000000000000000000003 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/App/AppState.swift; sourceTree = SOURCE_ROOT; };
-		01B000000000000000000004 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Models/Models.swift; sourceTree = SOURCE_ROOT; };
-		01B000000000000000000005 /* CoachService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/CoachService.swift; sourceTree = SOURCE_ROOT; };
-		01B000000000000000000006 /* ReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/ReminderScheduler.swift; sourceTree = SOURCE_ROOT; };
-		01B000000000000000000007 /* HealthKitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/HealthKitService.swift; sourceTree = SOURCE_ROOT; };
-		01B000000000000000000008 /* MetricsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/MetricsService.swift; sourceTree = SOURCE_ROOT; };
-		01B000000000000000000009 /* SupabaseGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/SupabaseGateway.swift; sourceTree = SOURCE_ROOT; };
-		01B00000000000000000000A /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Theme/Theme.swift; sourceTree = SOURCE_ROOT; };
-		01B00000000000000000000B /* TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Today/TodayView.swift; sourceTree = SOURCE_ROOT; };
-		01B00000000000000000000C /* CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Coach/CoachView.swift; sourceTree = SOURCE_ROOT; };
-		01B00000000000000000000D /* WorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Workout/WorkoutView.swift; sourceTree = SOURCE_ROOT; };
-		01B00000000000000000000E /* TrendsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Trends/TrendsView.swift; sourceTree = SOURCE_ROOT; };
-		01B00000000000000000000F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Settings/SettingsView.swift; sourceTree = SOURCE_ROOT; };
-		01B000000000000000000010 /* NathanCoach.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NathanCoach.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		01B000000000000000000011 /* NathanCoach.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NathanCoach/NathanCoach.entitlements; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000001 /* NathanCoach/App/NathanCoachApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/App/NathanCoachApp.swift; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000002 /* NathanCoach/App/ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/App/ContentView.swift; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000003 /* NathanCoach/App/AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/App/AppState.swift; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000004 /* NathanCoach/Models/Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Models/Models.swift; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000005 /* NathanCoach/Services/CoachService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/CoachService.swift; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000006 /* NathanCoach/Services/ReminderScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/ReminderScheduler.swift; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000007 /* NathanCoach/Services/HealthKitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/HealthKitService.swift; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000008 /* NathanCoach/Services/MetricsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/MetricsService.swift; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000009 /* NathanCoach/Services/SupabaseGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Services/SupabaseGateway.swift; sourceTree = SOURCE_ROOT; };
+		01B00000000000000000000A /* NathanCoach/Theme/Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Theme/Theme.swift; sourceTree = SOURCE_ROOT; };
+		01B00000000000000000000B /* NathanCoach/Features/Today/TodayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Today/TodayView.swift; sourceTree = SOURCE_ROOT; };
+		01B00000000000000000000C /* NathanCoach/Features/Coach/CoachView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Coach/CoachView.swift; sourceTree = SOURCE_ROOT; };
+		01B00000000000000000000D /* NathanCoach/Features/Workout/WorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Workout/WorkoutView.swift; sourceTree = SOURCE_ROOT; };
+		01B00000000000000000000E /* NathanCoach/Features/Trends/TrendsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Trends/TrendsView.swift; sourceTree = SOURCE_ROOT; };
+		01B00000000000000000000F /* NathanCoach/Features/Settings/SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NathanCoach/Features/Settings/SettingsView.swift; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000010 /* Loop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Loop.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		01B000000000000000000011 /* NathanCoach/NathanCoach.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NathanCoach/NathanCoach.entitlements; sourceTree = SOURCE_ROOT; };
+		01B000000000000000000012 /* NathanCoach/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = NathanCoach/Assets.xcassets; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -66,22 +68,23 @@
 		01D000000000000000000002 /* NathanCoach */ = {
 			isa = PBXGroup;
 			children = (
-				01B000000000000000000001 /* NathanCoachApp.swift */,
-				01B000000000000000000002 /* ContentView.swift */,
-				01B000000000000000000003 /* AppState.swift */,
-				01B000000000000000000004 /* Models.swift */,
-				01B000000000000000000005 /* CoachService.swift */,
-				01B000000000000000000006 /* ReminderScheduler.swift */,
-				01B000000000000000000007 /* HealthKitService.swift */,
-				01B000000000000000000008 /* MetricsService.swift */,
-				01B000000000000000000009 /* SupabaseGateway.swift */,
-				01B00000000000000000000A /* Theme.swift */,
-				01B00000000000000000000B /* TodayView.swift */,
-				01B00000000000000000000C /* CoachView.swift */,
-				01B00000000000000000000D /* WorkoutView.swift */,
-				01B00000000000000000000E /* TrendsView.swift */,
-				01B00000000000000000000F /* SettingsView.swift */,
-				01B000000000000000000011 /* NathanCoach.entitlements */,
+				01B000000000000000000001 /* NathanCoach/App/NathanCoachApp.swift */,
+				01B000000000000000000002 /* NathanCoach/App/ContentView.swift */,
+				01B000000000000000000003 /* NathanCoach/App/AppState.swift */,
+				01B000000000000000000004 /* NathanCoach/Models/Models.swift */,
+				01B000000000000000000005 /* NathanCoach/Services/CoachService.swift */,
+				01B000000000000000000006 /* NathanCoach/Services/ReminderScheduler.swift */,
+				01B000000000000000000007 /* NathanCoach/Services/HealthKitService.swift */,
+				01B000000000000000000008 /* NathanCoach/Services/MetricsService.swift */,
+				01B000000000000000000009 /* NathanCoach/Services/SupabaseGateway.swift */,
+				01B00000000000000000000A /* NathanCoach/Theme/Theme.swift */,
+				01B00000000000000000000B /* NathanCoach/Features/Today/TodayView.swift */,
+				01B00000000000000000000C /* NathanCoach/Features/Coach/CoachView.swift */,
+				01B00000000000000000000D /* NathanCoach/Features/Workout/WorkoutView.swift */,
+				01B00000000000000000000E /* NathanCoach/Features/Trends/TrendsView.swift */,
+				01B00000000000000000000F /* NathanCoach/Features/Settings/SettingsView.swift */,
+				01B000000000000000000012 /* NathanCoach/Assets.xcassets */,
+				01B000000000000000000011 /* NathanCoach/NathanCoach.entitlements */,
 			);
 			path = NathanCoach;
 			sourceTree = "<group>";
@@ -89,7 +92,7 @@
 		01D000000000000000000003 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				01B000000000000000000010 /* NathanCoach.app */,
+				01B000000000000000000010 /* Loop.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -111,7 +114,7 @@
 			);
 			name = NathanCoach;
 			productName = NathanCoach;
-			productReference = 01B000000000000000000010 /* NathanCoach.app */;
+			productReference = 01B000000000000000000010 /* Loop.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -152,6 +155,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				01A000000000000000000012 /* NathanCoach/Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -162,21 +166,21 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				01A000000000000000000001 /* NathanCoachApp.swift in Sources */,
-				01A000000000000000000002 /* ContentView.swift in Sources */,
-				01A000000000000000000003 /* AppState.swift in Sources */,
-				01A000000000000000000004 /* Models.swift in Sources */,
-				01A000000000000000000005 /* CoachService.swift in Sources */,
-				01A000000000000000000006 /* ReminderScheduler.swift in Sources */,
-				01A000000000000000000007 /* HealthKitService.swift in Sources */,
-				01A000000000000000000008 /* MetricsService.swift in Sources */,
-				01A000000000000000000009 /* SupabaseGateway.swift in Sources */,
-				01A00000000000000000000A /* Theme.swift in Sources */,
-				01A00000000000000000000B /* TodayView.swift in Sources */,
-				01A00000000000000000000C /* CoachView.swift in Sources */,
-				01A00000000000000000000D /* WorkoutView.swift in Sources */,
-				01A00000000000000000000E /* TrendsView.swift in Sources */,
-				01A00000000000000000000F /* SettingsView.swift in Sources */,
+				01A000000000000000000001 /* NathanCoach/App/NathanCoachApp.swift in Sources */,
+				01A000000000000000000002 /* NathanCoach/App/ContentView.swift in Sources */,
+				01A000000000000000000003 /* NathanCoach/App/AppState.swift in Sources */,
+				01A000000000000000000004 /* NathanCoach/Models/Models.swift in Sources */,
+				01A000000000000000000005 /* NathanCoach/Services/CoachService.swift in Sources */,
+				01A000000000000000000006 /* NathanCoach/Services/ReminderScheduler.swift in Sources */,
+				01A000000000000000000007 /* NathanCoach/Services/HealthKitService.swift in Sources */,
+				01A000000000000000000008 /* NathanCoach/Services/MetricsService.swift in Sources */,
+				01A000000000000000000009 /* NathanCoach/Services/SupabaseGateway.swift in Sources */,
+				01A00000000000000000000A /* NathanCoach/Theme/Theme.swift in Sources */,
+				01A00000000000000000000B /* NathanCoach/Features/Today/TodayView.swift in Sources */,
+				01A00000000000000000000C /* NathanCoach/Features/Coach/CoachView.swift in Sources */,
+				01A00000000000000000000D /* NathanCoach/Features/Workout/WorkoutView.swift in Sources */,
+				01A00000000000000000000E /* NathanCoach/Features/Trends/TrendsView.swift in Sources */,
+				01A00000000000000000000F /* NathanCoach/Features/Settings/SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -186,21 +190,22 @@
 		01F000000000000000000004 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = NathanCoach/NathanCoach.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = AJ69BPG2BY;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Nathan Coach";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Nathan Coach uses the camera to analyze meals when you choose to log food by photo.";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Nathan Coach reads Apple Health data like weight, steps, active energy, and workouts to personalize coaching.";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Nathan Coach writes weigh-ins and workout summaries to Apple Health when you allow it.";
+				INFOPLIST_KEY_CFBundleDisplayName = Loop;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Loop uses the camera to analyze meals when you choose to log food by photo.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Loop reads Apple Health data like weight, steps, active energy, and workouts to personalize coaching.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Loop writes weigh-ins and workout summaries to Apple Health when you allow it.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.leofelix.NathanCoach;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Loop;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -210,21 +215,22 @@
 		01F000000000000000000005 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = NathanCoach/NathanCoach.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = AJ69BPG2BY;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Nathan Coach";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Nathan Coach uses the camera to analyze meals when you choose to log food by photo.";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Nathan Coach reads Apple Health data like weight, steps, active energy, and workouts to personalize coaching.";
-				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Nathan Coach writes weigh-ins and workout summaries to Apple Health when you allow it.";
+				INFOPLIST_KEY_CFBundleDisplayName = Loop;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Loop uses the camera to analyze meals when you choose to log food by photo.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Loop reads Apple Health data like weight, steps, active energy, and workouts to personalize coaching.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Loop writes weigh-ins and workout summaries to Apple Health when you allow it.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.leofelix.NathanCoach;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Loop;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 1;

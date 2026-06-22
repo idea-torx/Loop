@@ -151,10 +151,18 @@ enum CommandParser {
         if lower.contains("?") { return nil }
         if reminderCommand(from: text) != nil { return nil }
 
-        let mealWords = ["breakfast", "lunch", "dinner", "snack", " ate ", "i ate",
-                         "just ate", "had ", "eating", "meal", "log meal", "for lunch", "for dinner"]
-        let isMeal = mealWords.contains { lower.contains($0) }
-        guard isMeal else { return nil }
+        let adviceWords = ["should i", "what should", "what can", "can i", "could i", "recommend",
+                           "advice", "ideas", "idea", "healthy", "better", "instead", "option"]
+        if adviceWords.contains(where: { lower.contains($0) }) { return nil }
+
+        let explicitLogWords = ["log", "track", "record", "add this meal", "add meal"]
+        let declarativeMealWords = ["i ate", "i had", "just ate", "just had", "had ", "lunch was",
+                                    "dinner was", "breakfast was", "snack was", "for lunch i",
+                                    "for dinner i", "for breakfast i"]
+        let isMealLog = explicitLogWords.contains { lower.contains($0) }
+            || declarativeMealWords.contains { lower.contains($0) }
+        guard isMealLog else { return nil }
+
         // Need some actual content, not just "lunch done".
         let words = lower.split(separator: " ")
         guard words.count >= 3 else { return nil }
@@ -322,7 +330,7 @@ actor CoachService {
         }
 
         if updates.isEmpty {
-            return "Got it. I’ll fold that into the plan. For today, keep the next move small and visible: complete one check-in, then we adjust."
+            return "I need the cloud coach for open-ended chat. Check Cloud & AI status, then send that again."
         }
 
         return "Updated. I changed the relevant checklist or preference, and I’ll use that context for the next nudge."

@@ -24,7 +24,10 @@ struct ContentView: View {
 
             VStack {
                 Spacer()
-                ModernTabBar(selectedTab: $selectedTab)
+                ZStack(alignment: .bottom) {
+                    BottomMenuBackdrop()
+                    ModernTabBar(selectedTab: $selectedTab)
+                }
             }
             .ignoresSafeArea(.container, edges: .bottom)
             .ignoresSafeArea(.keyboard)
@@ -33,6 +36,39 @@ struct ContentView: View {
         .task {
             appState.bootstrap()
         }
+    }
+}
+
+struct BottomMenuBackdrop: View {
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .opacity(0.78)
+
+            LinearGradient(
+                colors: [
+                    .clear,
+                    Color.black.opacity(0.34),
+                    Color.black.opacity(0.68)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        }
+        .frame(height: 150)
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black.opacity(0.55), location: 0.32),
+                    .init(color: .black, location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .allowsHitTesting(false)
     }
 }
 
@@ -95,7 +131,7 @@ struct ModernTabBar: View {
             }
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 18)
+        .padding(.bottom, 28)
         .shadow(color: CoachTheme.accent.opacity(0.10), radius: 16, y: 5)
         .shadow(color: .black.opacity(0.18), radius: 16, y: 8)
     }

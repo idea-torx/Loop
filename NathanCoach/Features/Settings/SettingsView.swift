@@ -196,9 +196,16 @@ struct SettingsView: View {
                 Text(appState.gateway.describeStatus())
                     .font(.subheadline)
                     .foregroundStyle(CoachTheme.Text.muted)
-                Text("Supabase auth, Postgres, RLS, Edge Functions, and Claude Haiku plug in here next.")
+                Text("Supabase auth, Postgres, RLS, Edge Functions, and Claude Haiku are wired for personal cloud persistence.")
                     .font(.caption)
                     .foregroundStyle(CoachTheme.Text.faint)
+                Text(appState.cloudSyncStatus)
+                    .font(.caption)
+                    .foregroundStyle(CoachTheme.Text.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                GlassPillButton(title: "Test cloud sync", isProminent: true) {
+                    Task { await appState.testCloudSync() }
+                }
             }
 
             divider

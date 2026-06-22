@@ -1,7 +1,8 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { callHaiku } from "../_shared/anthropic.ts";
 
-const system = `You estimate the nutrition of a meal from a short description and/or a photo.
+const system = `You are called only after Leo explicitly chooses to log a meal by text or photo.
+Estimate the nutrition of that meal from a short description and/or a photo.
 Give a reasonable, non-precise estimate of total calories and total protein in grams.
 Write a short, clean title for the meal (e.g. "Chicken bowl with rice").
 Always call the record_meal tool with your estimate. Do not over-claim precision.`;

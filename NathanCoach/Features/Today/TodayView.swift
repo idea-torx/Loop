@@ -9,6 +9,14 @@ struct TodayView: View {
 
     private var completedCount: Int { appState.tasks.filter(\.isComplete).count }
     private var totalCount: Int { appState.tasks.count }
+    private var timelineTasks: [DailyTask] {
+        appState.tasks.sorted { lhs, rhs in
+            let left = daySortMinutes(for: lhs)
+            let right = daySortMinutes(for: rhs)
+            if left != right { return left < right }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
     private var progress: Double {
         totalCount == 0 ? 0 : Double(completedCount) / Double(totalCount)
     }
@@ -142,7 +150,7 @@ struct TodayView: View {
             }
 
             VStack(spacing: 10) {
-                ForEach(appState.tasks) { task in
+                ForEach(timelineTasks) { task in
                     TaskRowView(
                         task: task,
                         onComplete: { complete(task) },
@@ -166,6 +174,22 @@ struct TodayView: View {
         withAnimation(.snappy(duration: 0.35)) {
             appState.toggleTask(task)
         }
+    }
+
+    private func daySortMinutes(for task: DailyTask) -> Int {
+        if let reminderTime = task.reminderTime {
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: reminderTime)
+            return (parts.hour ?? 12) * 60 + (parts.minute ?? 0)
+        }
+
+        let text = "\(task.title) \(task.detail)".lowercased()
+        if text.contains("morning") || text.contains("weigh") || text.contains("breakfast") { return 8 * 60 }
+        if text.contains("lunch") { return 12 * 60 }
+        if text.contains("step") || text.contains("walk") || text.contains("recovery") { return 15 * 60 + 30 }
+        if text.contains("dinner") { return 17 * 60 }
+        if text.contains("workout") || text.contains("gym") || text.contains("lift") { return 18 * 60 + 30 }
+        if text.contains("evening") || text.contains("review") || text.contains("sleep") { return 21 * 60 }
+        return 16 * 60
     }
 
     // MARK: Insight
