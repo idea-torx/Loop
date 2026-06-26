@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SwiftUI
 
 @MainActor
@@ -25,13 +26,18 @@ final class AppState: ObservableObject {
     @Published var workouts: [WorkoutSession] = WorkoutSession.seed
     @Published var workoutSchedule: [WorkoutDayPlan] = WorkoutDayPlan.seed
     @Published var selectedWorkoutDayID: WorkoutDayPlan.ID?
-    @Published var weighIns: [WeighIn] = WeighIn.seed
-    @Published var meals: [MealLog] = MealLog.seed
+    @Published var weighIns: [WeighIn] = []
+    @Published var meals: [MealLog] = []
     @Published var healthMetrics = HealthMetricSnapshot.seed
     @Published var weeklyReview = WeeklyReview.seed
     @Published var settings = AppSettings()
     @Published var isOnboardingComplete = false
     @Published var cloudSyncStatus = "Cloud has not checked in yet."
+    @Published var cloudUserID = SupabaseAuthStore.userID ?? ""
+    @Published var cloudAuthEmail = SupabaseAuthStore.email ?? ""
+    @Published var isCloudSigningIn = false
+    @Published var isSickDay = false
+    @Published private(set) var currentDay = Calendar.current.startOfDay(for: Date())
 
     let coachService = CoachService()
     let reminderScheduler = ReminderScheduler()
@@ -42,51 +48,156 @@ final class AppState: ObservableObject {
     private var session: SupabaseSession?
     private var didBootstrap = false
     private var isLoadingCloudData = false
+    private var cloudDayIDs: [String: String] = [:]
+    private var dailyLogSupportUnavailable = false
+    private var pendingMealLog: PendingMealLog?
+    private var sickDayKey: String { "loop_sick_day_\(Self.cloudDate(currentDay))" }
 
-    /// Ensure a valid anonymous Supabase session, restoring/refreshing across launches.
-    /// Returns nil when the backend isn't configured (app stays in local mode).
+    private struct PendingMealLog {
+        let description: String
+        let imageData: Data?
+        var answers: [String]
+    }
+
+    /// Ensure a valid Supabase account session, restoring/refreshing across launches.
+    /// Returns nil when cloud is unavailable or the user has not signed in.
     @discardableResult
     func ensureSession() async -> SupabaseSession? {
+        if !gateway.isConfigured {
+            gateway.loadConfiguration()
+        }
+
         guard let base = gateway.configuration.projectURL,
               let key = gateway.configuration.anonKey, !key.isEmpty else {
-            cloudSyncStatus = "Supabase is not configured in the app environment."
+            cloudSyncStatus = "Supabase config unavailable after environment, Info.plist, cache, and baked fallback checks."
             return nil
         }
 
         if let current = session, current.expiresAt > Date() { return current }
 
-        if let stored = UserDefaults.standard.string(forKey: "sb_refresh_token"),
+        SupabaseAuthStore.migrateFromUserDefaultsIfNeeded()
+
+        if SupabaseAuthStore.refreshToken != nil, SupabaseAuthStore.email == nil {
+            cloudSyncStatus = "Legacy anonymous cloud session detected for user \(Self.shortID(SupabaseAuthStore.userID ?? "")). Sign in or create an account in Settings so future data uses one stable identity."
+            return nil
+        }
+
+        if let stored = SupabaseAuthStore.refreshToken,
            let refreshed = await SupabaseGateway.refresh(base: base, anonKey: key, refreshToken: stored) {
             store(refreshed)
             cloudSyncStatus = "Supabase session refreshed."
             return refreshed
         }
-        if let fresh = await SupabaseGateway.signInAnonymously(base: base, anonKey: key) {
-            store(fresh)
-            cloudSyncStatus = "Supabase anonymous session created."
-            return fresh
+        if SupabaseAuthStore.refreshToken != nil {
+            let storedUser = SupabaseAuthStore.userID.map(Self.shortID) ?? "unknown"
+            cloudSyncStatus = "Could not refresh the stored Supabase session for user \(storedUser). Sign in again to reconnect cloud data without creating a different user."
+            return nil
         }
-        cloudSyncStatus = SupabaseGateway.lastEvent
+
+        cloudSyncStatus = "Sign in to Cloud & AI in Settings to sync Loop with one stable Supabase account."
         return nil
     }
 
-    private func store(_ newSession: SupabaseSession) {
+    func signInToCloud(email: String, password: String) async {
+        await authenticateCloud(email: email, password: password, isCreatingAccount: false)
+    }
+
+    func createCloudAccount(email: String, password: String) async {
+        await authenticateCloud(email: email, password: password, isCreatingAccount: true)
+    }
+
+    func signOutOfCloud() {
+        session = nil
+        cloudUserID = ""
+        cloudAuthEmail = ""
+        SupabaseAuthStore.clear()
+        cloudSyncStatus = "Signed out of Cloud & AI. Local data remains on this phone."
+    }
+
+    private func authenticateCloud(email: String, password: String, isCreatingAccount: Bool) async {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedEmail.isEmpty, password.count >= 6 else {
+            cloudSyncStatus = "Enter an email and a password with at least 6 characters."
+            return
+        }
+
+        if !gateway.isConfigured {
+            gateway.loadConfiguration()
+        }
+        guard let base = gateway.configuration.projectURL,
+              let key = gateway.configuration.anonKey, !key.isEmpty else {
+            cloudSyncStatus = "Supabase config unavailable after environment, Info.plist, cache, and baked fallback checks."
+            return
+        }
+
+        isCloudSigningIn = true
+        defer { isCloudSigningIn = false }
+
+        let newSession: SupabaseSession?
+        if isCreatingAccount {
+            newSession = await SupabaseGateway.signUpWithPassword(base: base, anonKey: key, email: normalizedEmail, password: password)
+        } else {
+            newSession = await SupabaseGateway.signInWithPassword(base: base, anonKey: key, email: normalizedEmail, password: password)
+        }
+
+        guard let newSession else {
+            cloudSyncStatus = SupabaseGateway.lastEvent
+            return
+        }
+
+        store(newSession, email: normalizedEmail)
+        cloudSyncStatus = isCreatingAccount
+            ? "Cloud account created and connected as \(Self.shortID(newSession.userID))."
+            : "Signed in to Cloud & AI as \(Self.shortID(newSession.userID))."
+        await loadCloudData()
+    }
+
+    private func store(_ newSession: SupabaseSession, email: String? = SupabaseAuthStore.email) {
         session = newSession
-        UserDefaults.standard.set(newSession.refreshToken, forKey: "sb_refresh_token")
-        UserDefaults.standard.set(newSession.userID, forKey: "sb_user_id")
+        cloudUserID = newSession.userID
+        if let email { cloudAuthEmail = email }
+        SupabaseAuthStore.store(refreshToken: newSession.refreshToken, userID: newSession.userID, email: email)
     }
 
     func bootstrap() {
         guard !didBootstrap else { return }
         didBootstrap = true
+        refreshCurrentDay()
         gateway.loadConfiguration()
         if conversations.isEmpty {
             startDailyCheckInConversation()
         }
-        if selectedWorkoutDayID == nil {
-            selectedWorkoutDayID = workoutSchedule.first?.id
-        }
+        selectCurrentWorkoutDay()
+        rescheduleReminders()
+        Task { await reminderScheduler.scheduleDailyNudges(tone: settings.notificationTone) }
+        Task { await refreshHealthMetrics() }
         Task { await loadCloudData() }
+    }
+
+    func reloadCloudData() async {
+        refreshCurrentDay()
+        await loadCloudData()
+    }
+
+    func refreshDailyState() async {
+        refreshCurrentDay()
+        await refreshDailyInsights()
+        await loadCloudData()
+    }
+
+    private func refreshCurrentDay() {
+        let today = Calendar.current.startOfDay(for: Date())
+        if currentDay != today {
+            currentDay = today
+        }
+        isSickDay = UserDefaults.standard.bool(forKey: sickDayKey)
+    }
+
+    func selectCurrentWorkoutDay() {
+        let today = Calendar.current.startOfDay(for: Date())
+        refreshCurrentDay()
+        selectedWorkoutDayID = workoutSchedule.first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) })?.id
+            ?? workoutSchedule.first?.id
     }
 
     /// Open a blank chat for open-ended fitness, nutrition, and coaching questions.
@@ -121,7 +232,9 @@ final class AppState: ObservableObject {
     }
 
     var selectedWorkoutDay: WorkoutDayPlan? {
-        let selectedID = selectedWorkoutDayID ?? workoutSchedule.first?.id
+        let selectedID = selectedWorkoutDayID
+            ?? workoutSchedule.first(where: { Calendar.current.isDate($0.date, inSameDayAs: currentDay) })?.id
+            ?? workoutSchedule.first?.id
         return workoutSchedule.first(where: { $0.id == selectedID }) ?? workoutSchedule.first
     }
 
@@ -164,6 +277,46 @@ final class AppState: ObservableObject {
         rescheduleReminders()
     }
 
+    func activateSickDay() {
+        isSickDay = true
+        UserDefaults.standard.set(true, forKey: sickDayKey)
+
+        for index in tasks.indices {
+            let title = tasks[index].title.lowercased()
+            guard !title.contains("light walk") else { continue }
+            tasks[index].isComplete = true
+            tasks[index].completedAt = Date()
+            if !tasks[index].detail.localizedCaseInsensitiveContains("sick day") {
+                tasks[index].detail = "Skipped for sick day"
+            }
+            syncTask(tasks[index])
+        }
+
+        if !tasks.contains(where: { $0.title.localizedCaseInsensitiveContains("light walk") }) {
+            let walk = DailyTask(
+                title: "Light walk",
+                detail: "10-20 minutes easy if symptoms allow",
+                systemImage: "figure.walk",
+                isComplete: false,
+                reminderTime: nil
+            )
+            tasks.append(walk)
+            syncTask(walk)
+        }
+
+        sortTasksForToday()
+        weeklyReview = metricsService.makeWeeklyReview(
+            tasks: tasks,
+            weighIns: weighIns,
+            meals: meals,
+            workouts: workouts,
+            health: healthMetrics,
+            isSickDay: isSickDay
+        )
+        syncWeeklyReview()
+        rescheduleReminders()
+    }
+
     func rescheduleReminders() {
         let snapshot = tasks
         Task { await reminderScheduler.scheduleTaskReminders(snapshot, tone: settings.notificationTone) }
@@ -185,13 +338,31 @@ final class AppState: ObservableObject {
         }
 
         let text = "\(task.title) \(task.detail)".lowercased()
-        if text.contains("morning") || text.contains("weigh") || text.contains("breakfast") { return 8 * 60 }
+        if text.contains("morning") || text.contains("weigh") || text.contains("breakfast") { return 8 * 60 + 15 }
         if text.contains("lunch") { return 12 * 60 }
         if text.contains("step") || text.contains("walk") || text.contains("recovery") { return 15 * 60 + 30 }
         if text.contains("dinner") { return 17 * 60 }
         if text.contains("workout") || text.contains("gym") || text.contains("lift") { return 18 * 60 + 30 }
         if text.contains("evening") || text.contains("review") || text.contains("sleep") { return 21 * 60 }
         return 16 * 60
+    }
+
+    private func normalizeMorningWeighInReminder() {
+        guard let index = tasks.firstIndex(where: {
+            $0.title.localizedCaseInsensitiveContains("weigh-in")
+                || $0.title.localizedCaseInsensitiveContains("weigh in")
+        }) else {
+            return
+        }
+
+        let target = DailyTask.time(8, 15)
+        let parts = tasks[index].reminderTime.map {
+            Calendar.current.dateComponents([.hour, .minute], from: $0)
+        }
+        guard parts?.hour != 8 || parts?.minute != 15 else { return }
+
+        tasks[index].reminderTime = target
+        syncTask(tasks[index])
     }
 
     // MARK: Meals
@@ -217,7 +388,7 @@ final class AppState: ObservableObject {
     }
 
     var todaysMeals: [MealLog] {
-        meals.filter { Calendar.current.isDateInToday($0.date) }
+        meals.filter { Calendar.current.isDate($0.date, inSameDayAs: currentDay) }
     }
 
     var caloriesToday: Int { todaysMeals.reduce(0) { $0 + $1.calories } }
@@ -239,14 +410,35 @@ final class AppState: ObservableObject {
             return
         }
 
-        // Conversational meal logging — macros evaluated by Haiku.
+        if pendingMealLog != nil {
+            if ["cancel", "never mind", "nevermind", "skip"].contains(trimmed.lowercased()) {
+                pendingMealLog = nil
+                messages.append(CoachMessage(role: .assistant, text: "No problem. I did not log that meal."))
+                syncLatestMessage()
+                return
+            }
+
+            await continuePendingMealLog(with: trimmed)
+            return
+        }
+
+        // Body-weight logging is deterministic so a clear weigh-in never depends on model formatting.
+        if let pounds = Self.weightLogValue(from: trimmed) {
+            logWeighIn(pounds)
+            completeTask(matching: "weigh-in")
+            let reply = "Logged \(pounds.formatted(.number.precision(.fractionLength(1)))) lb. The trend chart will use this as a real weigh-in, not placeholder data."
+            messages.append(CoachMessage(role: .assistant, text: reply))
+            syncLatestMessage()
+            return
+        }
+
+        // Conversational meal logging — macros evaluated by the nutrition specialist.
         if let description = CommandParser.mealLog(from: trimmed) {
             let macros = await logMealWithHaiku(description: description, imageData: nil)
-            if let keyword = CommandParser.mealKeyword(in: trimmed) {
+            let reply = mealLogReply(for: macros, source: "Logged")
+            if macros.shouldLog, let keyword = CommandParser.mealKeyword(in: trimmed) {
                 completeTask(matching: keyword)
             }
-            let reply = "Logged: \(macros.title) — \(macros.calories) cal, \(macros.protein)g protein. "
-                + "That puts you at \(proteinToday)g protein today (target \(PTProtocol.proteinTargetG)g)."
             messages.append(CoachMessage(role: .assistant, text: reply))
             syncLatestMessage()
             return
@@ -264,7 +456,7 @@ final class AppState: ObservableObject {
 
     // MARK: Conversational actions
 
-    /// Evaluate macros via the Haiku Edge Function (falling back to a local estimate), then log the meal.
+    /// Evaluate macros via the meal-specialist Edge Function, then log only when confidence is sufficient.
     @discardableResult
     func logMealWithHaiku(description: String, imageData: Data?) async -> MealMacros {
         var macros: MealMacros?
@@ -274,7 +466,12 @@ final class AppState: ObservableObject {
             macros = await SupabaseGateway.analyzeMeal(base: base, anonKey: key, token: creds.accessToken, description: description, imageData: imageData)
         }
         let resolved = macros ?? localMealEstimate(description: description)
-        logMeal(title: resolved.title, calories: resolved.calories, protein: resolved.protein, imageData: imageData)
+        if resolved.shouldLog {
+            pendingMealLog = nil
+            logMeal(title: resolved.title, calories: resolved.calories, protein: resolved.protein, imageData: imageData)
+        } else {
+            pendingMealLog = PendingMealLog(description: description, imageData: imageData, answers: [])
+        }
         return resolved
     }
 
@@ -284,17 +481,73 @@ final class AppState: ObservableObject {
         messages.append(CoachMessage(role: .user, text: "Log this meal photo."))
         syncLatestMessage()
         let macros = await logMealWithHaiku(description: description, imageData: imageData)
-        let reply = "Logged from photo: \(macros.title) — \(macros.calories) cal, \(macros.protein)g protein."
-            + " Today is now \(proteinToday)g protein."
+        let reply = mealLogReply(for: macros, source: "Logged from photo")
         messages.append(CoachMessage(role: .assistant, text: reply))
         syncLatestMessage()
+    }
+
+    private func continuePendingMealLog(with answer: String) async {
+        guard var pending = pendingMealLog else { return }
+        pending.answers.append(answer)
+        pendingMealLog = pending
+
+        var macros: MealMacros?
+        if let creds = await ensureSession(),
+           let base = gateway.configuration.projectURL,
+           let key = gateway.configuration.anonKey {
+            macros = await SupabaseGateway.analyzeMeal(
+                base: base,
+                anonKey: key,
+                token: creds.accessToken,
+                description: pending.description,
+                imageData: pending.imageData,
+                followUpAnswers: pending.answers
+            )
+        }
+
+        let resolved = macros ?? localMealEstimate(description: pending.description)
+        if resolved.shouldLog {
+            pendingMealLog = nil
+            logMeal(title: resolved.title, calories: resolved.calories, protein: resolved.protein, imageData: pending.imageData)
+        } else {
+            pendingMealLog = PendingMealLog(description: pending.description, imageData: pending.imageData, answers: pending.answers)
+        }
+
+        messages.append(CoachMessage(role: .assistant, text: mealLogReply(for: resolved, source: "Logged")))
+        syncLatestMessage()
+    }
+
+    private func mealLogReply(for macros: MealMacros, source: String) -> String {
+        if macros.shouldLog {
+            var reply = "\(source): \(macros.title) — \(macros.calories) cal, \(macros.protein)g protein."
+                + " Today is now \(proteinToday)g protein (target \(PTProtocol.proteinTargetG)g)."
+            if macros.confidence == "low", !macros.confidenceReason.isEmpty {
+                reply += " Low confidence: \(macros.confidenceReason)"
+            }
+            return reply
+        }
+
+        let questions = macros.clarifyingQuestions.isEmpty
+            ? ["What portion did you have, and was there any oil, sauce, dressing, or drink I should include?"]
+            : macros.clarifyingQuestions
+        return "I’m not logging that yet because the estimate depends on a detail I can’t safely infer. "
+            + questions.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: " ")
     }
 
     private func localMealEstimate(description: String) -> MealMacros {
         // Offline fallback when the backend isn't configured.
         let title = description.split(separator: ",").first.map(String.init)?
             .trimmingCharacters(in: .whitespaces) ?? "Meal"
-        return MealMacros(title: title.isEmpty ? "Meal" : title, calories: 550, protein: 45)
+        return MealMacros(
+            title: title.isEmpty ? "Meal" : title,
+            calories: 550,
+            protein: 45,
+            shouldLog: true,
+            confidence: "low",
+            confidenceReason: "Offline fallback estimate.",
+            clarifyingQuestions: [],
+            notes: ""
+        )
     }
 
     private func completeTask(matching keyword: String) {
@@ -362,6 +615,12 @@ final class AppState: ObservableObject {
 
         messages.append(CoachMessage(role: .user, text: "Workout: \(trimmed)"))
         syncLatestMessage()
+
+        if let response = await haikuCoachResponse(to: "Log workout sets for \(selectedWorkoutDay?.dayName ?? "today"): \(trimmed)") {
+            apply(response)
+            return
+        }
+
         let response = await coachService.respondToWorkoutLog(trimmed, state: self)
         apply(response)
     }
@@ -397,19 +656,17 @@ final class AppState: ObservableObject {
                     syncTask(tasks[index])
                 }
             case .weighIn(let value):
-                let weighIn = WeighIn(date: Date(), pounds: value)
-                weighIns.append(weighIn)
-                syncWeighIn(weighIn)
+                logWeighIn(value)
             case .meal(let title, let calories, let protein):
-                let meal = MealLog(date: Date(), title: title, calories: calories, protein: protein)
-                meals.append(meal)
-                syncMeal(meal)
+                logMeal(title: title, calories: calories, protein: protein, imageData: nil)
             case .mealUpdate(let id, let keyword, let title, let calories, let protein):
                 updateMealFromCoach(id: id, keyword: keyword, title: title, calories: calories, protein: protein)
             case .mealDelete(let id, let keyword):
                 deleteMealFromCoach(id: id, keyword: keyword)
             case .notificationTone(let tone):
                 settings.notificationTone = tone
+                rescheduleReminders()
+                Task { await reminderScheduler.scheduleDailyNudges(tone: settings.notificationTone) }
             case .gymDays(let days):
                 settings.gymDays = days
             case .mealTiming(let timing):
@@ -426,14 +683,15 @@ final class AppState: ObservableObject {
             weighIns: weighIns,
             meals: meals,
             workouts: workouts,
-            health: healthMetrics
+            health: healthMetrics,
+            isSickDay: isSickDay
         )
         syncWeeklyReview()
     }
 
-    func addSet(exercise: String, reps: Int, weight: Int) {
+    func addSet(exercise: String, reps: Int, weight: Int, rir: Int? = nil) {
         guard let dayIndex = selectedWorkoutDayIndex() else { return }
-        let set = ExerciseSet(exercise: exercise, reps: reps, weight: weight)
+        let set = makeExerciseSet(exercise: exercise, reps: reps, weight: weight, rir: rir)
         workoutSchedule[dayIndex].sets.append(set)
         workoutSchedule[dayIndex].isTrainingDay = true
 
@@ -442,18 +700,38 @@ final class AppState: ObservableObject {
         syncExerciseSet(set, workout: session, dayID: workoutSchedule[dayIndex].id, sortOrder: workoutSchedule[dayIndex].sets.count - 1)
     }
 
-    func updateSet(_ setID: ExerciseSet.ID, exercise: String, reps: Int, weight: Int) {
+    func updateSet(_ setID: ExerciseSet.ID, exercise: String, reps: Int, weight: Int, rir: Int? = nil) {
         guard let dayIndex = selectedWorkoutDayIndex(),
               let setIndex = workoutSchedule[dayIndex].sets.firstIndex(where: { $0.id == setID }) else { return }
-        workoutSchedule[dayIndex].sets[setIndex].exercise = exercise
+        let metadata = Self.exerciseMetadata(for: exercise)
+        workoutSchedule[dayIndex].sets[setIndex].exercise = metadata.displayName
+        workoutSchedule[dayIndex].sets[setIndex].normalizedExercise = metadata.normalized
+        workoutSchedule[dayIndex].sets[setIndex].category = metadata.category
         workoutSchedule[dayIndex].sets[setIndex].reps = reps
         workoutSchedule[dayIndex].sets[setIndex].weight = weight
+        workoutSchedule[dayIndex].sets[setIndex].targetMinReps = metadata.range.min
+        workoutSchedule[dayIndex].sets[setIndex].targetMaxReps = metadata.range.max
+        workoutSchedule[dayIndex].sets[setIndex].rir = rir
         let updatedSet = workoutSchedule[dayIndex].sets[setIndex]
 
         let session = workoutSession(from: workoutSchedule[dayIndex])
         upsertLocalWorkoutSession(session)
         syncWorkoutSession(session, dayID: workoutSchedule[dayIndex].id)
         syncUpdatedExerciseSet(updatedSet)
+    }
+
+    private func makeExerciseSet(exercise: String, reps: Int, weight: Int, rir: Int?) -> ExerciseSet {
+        let metadata = Self.exerciseMetadata(for: exercise)
+        return ExerciseSet(
+            exercise: metadata.displayName,
+            normalizedExercise: metadata.normalized,
+            category: metadata.category,
+            reps: reps,
+            weight: weight,
+            targetMinReps: metadata.range.min,
+            targetMaxReps: metadata.range.max,
+            rir: rir
+        )
     }
 
     func deleteSet(_ setID: ExerciseSet.ID) {
@@ -480,7 +758,10 @@ final class AppState: ObservableObject {
     }
 
     private func updateMealFromCoach(id: String?, keyword: String?, title: String?, calories: Int?, protein: Int?) {
-        guard let index = mealIndex(id: id, keyword: keyword) else { return }
+        guard let index = mealIndex(id: id, keyword: keyword) else {
+            createMealFromCoachUpdate(keyword: keyword, title: title, calories: calories, protein: protein)
+            return
+        }
         if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             meals[index].title = title
         }
@@ -491,6 +772,30 @@ final class AppState: ObservableObject {
             meals[index].protein = protein
         }
         syncUpdatedMeal(meals[index])
+    }
+
+    private func createMealFromCoachUpdate(keyword: String?, title: String?, calories: Int?, protein: Int?) {
+        guard calories != nil || protein != nil else { return }
+
+        let resolvedTitle = Self.nonEmpty(title)
+            ?? Self.nonEmpty(keyword)
+            ?? "Meal"
+        logMeal(
+            title: Self.capitalizedFirst(resolvedTitle),
+            calories: max(0, calories ?? 0),
+            protein: max(0, protein ?? 0),
+            imageData: nil
+        )
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func capitalizedFirst(_ value: String) -> String {
+        guard let first = value.first else { return value }
+        return first.uppercased() + value.dropFirst()
     }
 
     private func deleteMealFromCoach(id: String?, keyword: String?) {
@@ -540,11 +845,118 @@ final class AppState: ObservableObject {
     private func upsertLocalWorkoutSession(_ session: WorkoutSession) {
         if let index = workouts.firstIndex(where: { Calendar.current.isDate($0.date, inSameDayAs: session.date) }) {
             workouts[index] = session
-        } else if workouts.isEmpty {
-            workouts = [session]
         } else {
-            workouts[0] = session
+            workouts.insert(session, at: 0)
         }
+        workouts.sort { $0.date > $1.date }
+    }
+
+    func overloadRecommendation(for exercise: String, fallbackReps: Int, fallbackWeight: Int) -> OverloadRecommendation {
+        let metadata = Self.exerciseMetadata(for: exercise)
+        let selectedDate = selectedWorkoutDay?.date ?? Date()
+        let selectedSplit = Self.splitKey(for: selectedWorkoutDay?.title ?? "")
+        let previous = previousComparableSession(
+            normalizedExercise: metadata.normalized,
+            selectedSplit: selectedSplit,
+            before: selectedDate
+        )
+        let previousSets = previous?.sets.filter { Self.comparisonKeys(for: $0).contains(metadata.normalized) } ?? []
+        let topReps = metadata.range.max
+
+        guard let previous, !previousSets.isEmpty else {
+            return OverloadRecommendation(
+                exercise: metadata.displayName,
+                normalizedExercise: metadata.normalized,
+                split: selectedSplit,
+                category: metadata.category,
+                targetMinReps: metadata.range.min,
+                targetMaxReps: metadata.range.max,
+                previousDate: nil,
+                previousSets: [],
+                suggestedWeight: fallbackWeight,
+                suggestedReps: max(fallbackReps, metadata.range.min),
+                reason: "No previous \(metadata.displayName) set found yet. Start inside \(metadata.range.min)-\(metadata.range.max) reps."
+            )
+        }
+
+        let heaviest = previousSets.map(\.weight).max() ?? fallbackWeight
+        let sameWeightSets = previousSets.filter { $0.weight == heaviest }
+        let comparisonSets = sameWeightSets.isEmpty ? previousSets : sameWeightSets
+        let allHitTop = comparisonSets.allSatisfy { $0.reps >= topReps }
+        let hadZeroRIR = comparisonSets.contains { $0.rir == 0 }
+        let suggestedWeight = allHitTop && !hadZeroRIR ? heaviest + 5 : heaviest
+        let suggestedReps = allHitTop && !hadZeroRIR
+            ? metadata.range.min
+            : min(topReps, max((comparisonSets.map(\.reps).min() ?? fallbackReps) + 1, metadata.range.min))
+
+        let reason: String
+        if allHitTop && hadZeroRIR {
+            reason = "You hit the top of the range last time, but a 0 RIR set says hold load and own it again."
+        } else if allHitTop {
+            reason = "You hit \(comparisonSets.map(\.reps).map(String.init).joined(separator: "/")) last time. Add 5 lb and restart the range."
+        } else {
+            reason = "Last time was \(comparisonSets.map { "\($0.reps)" }.joined(separator: "/")). Keep load and add reps toward \(topReps)."
+        }
+
+        return OverloadRecommendation(
+            exercise: metadata.displayName,
+            normalizedExercise: metadata.normalized,
+            split: selectedSplit,
+            category: metadata.category,
+            targetMinReps: metadata.range.min,
+            targetMaxReps: metadata.range.max,
+            previousDate: previous.date,
+            previousSets: comparisonSets,
+            suggestedWeight: suggestedWeight,
+            suggestedReps: suggestedReps,
+            reason: reason
+        )
+    }
+
+    private func previousComparableSession(normalizedExercise: String, selectedSplit: String, before selectedDate: Date) -> WorkoutSession? {
+        let selectedDayStart = Calendar.current.startOfDay(for: selectedDate)
+        let priorSessions = workouts
+            .filter { session in
+                Calendar.current.startOfDay(for: session.date) < selectedDayStart
+                    && session.sets.contains { Self.comparisonKeys(for: $0).contains(normalizedExercise) }
+            }
+            .sorted { $0.date > $1.date }
+
+        return priorSessions.first { Self.splitKey(for: $0.title) == selectedSplit } ?? priorSessions.first
+    }
+
+    private func logWeighIn(_ pounds: Double) {
+        let weighIn = WeighIn(date: Date(), pounds: pounds)
+        weighIns.append(weighIn)
+        weighIns.sort { $0.date < $1.date }
+        syncWeighIn(weighIn)
+        weeklyReview = metricsService.makeWeeklyReview(
+            tasks: tasks,
+            weighIns: weighIns,
+            meals: meals,
+            workouts: workouts,
+            health: healthMetrics,
+            isSickDay: isSickDay
+        )
+        syncWeeklyReview()
+    }
+
+    func refreshHealthMetrics() async {
+        healthMetrics = await healthKitService.fetchTodaySnapshot()
+        weeklyReview = metricsService.makeWeeklyReview(
+            tasks: tasks,
+            weighIns: weighIns,
+            meals: meals,
+            workouts: workouts,
+            health: healthMetrics,
+            isSickDay: isSickDay
+        )
+        syncDailyMetricSnapshot()
+    }
+
+    func refreshDailyInsights() async {
+        await refreshHealthMetrics()
+        syncWeeklyReview()
     }
 
     private func haikuCoachResponse(to text: String) async -> CoachResponse? {
@@ -601,7 +1013,8 @@ final class AppState: ObservableObject {
             "training": [
                 "selected_day": selectedDayContext,
                 "week_schedule": workoutSchedule.map(Self.workoutDayContext),
-                "latest_session": latestSessionContext
+                "latest_session": latestSessionContext,
+                "progressive_overload": overloadContext()
             ],
             "recent_messages": messages.dropLast().suffix(8).map { [
                 "role": $0.role.cloudValue,
@@ -621,8 +1034,11 @@ final class AppState: ObservableObject {
         case "task_completed":
             guard let keyword = raw["keyword"] as? String ?? raw["title"] as? String else { return nil }
             return .taskCompleted(keyword: keyword)
-        case "weigh_in":
-            guard let pounds = Self.doubleValue(raw["pounds"]) ?? Self.doubleValue(raw["value"]) else { return nil }
+        case "weigh_in", "weigh-in", "weight_log", "body_weight", "weight":
+            guard let pounds = Self.doubleValue(raw["pounds"])
+                ?? Self.doubleValue(raw["value"])
+                ?? Self.doubleValue(raw["weight"])
+                ?? Self.doubleValue(raw["body_weight"]) else { return nil }
             return .weighIn(pounds)
         case "meal_log":
             guard let title = raw["title"] as? String else { return nil }
@@ -656,7 +1072,7 @@ final class AppState: ObservableObject {
             let reps = (raw["reps"] as? NSNumber)?.intValue ?? 0
             let weight = (raw["weight"] as? NSNumber)?.intValue ?? 0
             guard reps > 0 else { return nil }
-            return .workoutSet(exercise: exercise, reps: reps, weight: weight)
+            return .workoutSet(exercise: normalizedExerciseName(exercise), reps: reps, weight: weight)
         case "workout_plan", "workout_update", "workout_substitution":
             let title = raw["title"] as? String ?? raw["name"] as? String ?? "Coach Updated Session"
             let focus = raw["focus"] as? String
@@ -700,8 +1116,51 @@ final class AppState: ObservableObject {
     private static func exerciseSetContext(_ set: ExerciseSet) -> [String: Any] {
         [
             "exercise": set.exercise,
+            "normalized_exercise": comparisonKey(for: set),
+            "exercise_category": set.category ?? exerciseCategory(forNormalizedName: comparisonKey(for: set)),
             "reps": set.reps,
-            "weight": set.weight
+            "weight": set.weight,
+            "target_min_reps": set.targetMinReps ?? NSNull(),
+            "target_max_reps": set.targetMaxReps ?? NSNull(),
+            "rir": set.rir ?? NSNull()
+        ]
+    }
+
+    private func overloadContext() -> [String: Any] {
+        let selectedSets = selectedWorkoutDay?.sets ?? []
+        let uniqueExercises = Array(Set(selectedSets.map { Self.comparisonKey(for: $0) })).prefix(6)
+        let recommendations = uniqueExercises.compactMap { key -> [String: Any]? in
+            guard let set = selectedSets.last(where: { Self.comparisonKeys(for: $0).contains(key) }) else { return nil }
+            let recommendation = overloadRecommendation(for: set.exercise, fallbackReps: set.reps, fallbackWeight: set.weight)
+            return Self.overloadContext(from: recommendation)
+        }
+
+        return [
+            "selected_split": Self.splitKey(for: selectedWorkoutDay?.title ?? ""),
+            "rules": [
+                "method": "double_progression",
+                "load_jump_lb": 5,
+                "same_exercise_only": true,
+                "rir_suppresses_load_jump_at": 0
+            ],
+            "recommendations": Array(recommendations)
+        ]
+    }
+
+    private static func overloadContext(from recommendation: OverloadRecommendation) -> [String: Any] {
+        [
+            "exercise": recommendation.exercise,
+            "normalized_exercise": recommendation.normalizedExercise,
+            "split": recommendation.split,
+            "category": recommendation.category,
+            "target_min_reps": recommendation.targetMinReps,
+            "target_max_reps": recommendation.targetMaxReps,
+            "has_history": recommendation.hasHistory,
+            "previous_date": recommendation.previousDate.map(Self.cloudDate) ?? NSNull(),
+            "previous_sets": recommendation.previousSets.map(exerciseSetContext),
+            "suggested_weight": recommendation.suggestedWeight,
+            "suggested_reps": recommendation.suggestedReps,
+            "reason": recommendation.reason
         ]
     }
 
@@ -712,6 +1171,39 @@ final class AppState: ObservableObject {
         return nil
     }
 
+    private static func shortID(_ id: String) -> String {
+        id.isEmpty ? "unknown" : String(id.suffix(8))
+    }
+
+    private static func weightLogValue(from text: String) -> Double? {
+        let lower = text.lowercased()
+        let hasWeightIntent = lower.contains("weigh") || lower.contains("weight") || lower.contains("scale")
+        let hasLogIntent = lower.contains("log")
+            || lower.contains("record")
+            || lower.contains("track")
+            || lower.contains("add")
+            || lower.contains("checked in")
+            || lower.contains("came in")
+            || lower.contains("i was")
+            || lower.contains("i'm")
+            || lower.contains("im ")
+            || lower.contains("today")
+        guard hasWeightIntent, hasLogIntent else { return nil }
+
+        let pattern = #"(?<!\d)(\d{2,3}(?:\.\d{1,2})?)(?!\d)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(lower.startIndex..<lower.endIndex, in: lower)
+        let matches = regex.matches(in: lower, range: range)
+
+        for match in matches {
+            guard let valueRange = Range(match.range(at: 1), in: lower),
+                  let value = Double(lower[valueRange]),
+                  (80...500).contains(value) else { continue }
+            return value
+        }
+        return nil
+    }
+
     func testCloudSync() async {
         gateway.loadConfiguration()
         guard let context = await cloudContext else {
@@ -719,16 +1211,24 @@ final class AppState: ObservableObject {
             return
         }
         await upsertProfile(context)
-        let rows = await SupabaseGateway.select(
+        let profileRows = await SupabaseGateway.select(
             base: context.base,
             anonKey: context.anonKey,
             token: context.token,
             table: "profiles",
             query: "select=id,display_name&id=eq.\(context.userID)&limit=1"
         )
-        cloudSyncStatus = rows.isEmpty
-            ? "Connected, but profile read/write did not confirm. \(SupabaseGateway.lastEvent)"
-            : "Cloud sync confirmed. Profile row is visible in Supabase."
+        let weighRows = await SupabaseGateway.select(
+            base: context.base,
+            anonKey: context.anonKey,
+            token: context.token,
+            table: "weigh_ins",
+            query: "select=id,pounds,measured_at&order=measured_at.desc&limit=5"
+        )
+        let parsedWeights = weighRows.compactMap(Self.weighIn(from:))
+        cloudSyncStatus = profileRows.isEmpty
+            ? "Connected as user \(Self.shortID(context.userID)), but profile read/write did not confirm. \(SupabaseGateway.lastEvent)"
+            : "Cloud sync confirmed as user \(Self.shortID(context.userID)). Visible weigh-in rows: \(weighRows.count), parsed: \(parsedWeights.count). If dashboard rows have another user_id, RLS hides them from this app install."
     }
 
     // MARK: - Supabase sync
@@ -738,6 +1238,31 @@ final class AppState: ObservableObject {
         let anonKey: String
         let token: String
         let userID: String
+    }
+
+    struct OverloadRecommendation {
+        let exercise: String
+        let normalizedExercise: String
+        let split: String
+        let category: String
+        let targetMinReps: Int
+        let targetMaxReps: Int
+        let previousDate: Date?
+        let previousSets: [ExerciseSet]
+        let suggestedWeight: Int
+        let suggestedReps: Int
+        let reason: String
+
+        var hasHistory: Bool { previousDate != nil && !previousSets.isEmpty }
+
+        var previousSummary: String {
+            guard hasHistory else { return "No prior set yet" }
+            return previousSets.map { "\($0.weight)×\($0.reps)" }.joined(separator: ", ")
+        }
+
+        var targetSummary: String {
+            "\(suggestedWeight) lb × \(suggestedReps)"
+        }
     }
 
     private var cloudContext: CloudContext? {
@@ -750,24 +1275,27 @@ final class AppState: ObservableObject {
     }
 
     private func loadCloudData() async {
-        guard !isLoadingCloudData, let context = await cloudContext else { return }
+        guard !isLoadingCloudData else { return }
         isLoadingCloudData = true
         defer { isLoadingCloudData = false }
+        guard let context = await cloudContext else { return }
 
         await upsertProfile(context)
-        await seedTodayTasksIfNeeded(context)
-
-        let loadedTasks = await loadTasks(context)
-        if !loadedTasks.isEmpty {
-            tasks = loadedTasks
-            sortTasksForToday()
+        _ = await ensureDailyLogID(for: currentDay, context: context)
+        var loadedTasks = await loadTasks(context)
+        if loadedTasks.isEmpty {
+            await seedTodayTasksIfNeeded(context)
+            loadedTasks = await loadTasks(context)
         }
+        tasks = loadedTasks.isEmpty ? DailyTask.seed : loadedTasks
+        normalizeMorningWeighInReminder()
+        sortTasksForToday()
 
         let loadedMeals = await loadMeals(context)
-        if !loadedMeals.isEmpty { meals = loadedMeals }
+        meals = loadedMeals
 
         let loadedWeighIns = await loadWeighIns(context)
-        if !loadedWeighIns.isEmpty { weighIns = loadedWeighIns }
+        weighIns = loadedWeighIns.items
 
         let loadedMessages = await loadMessages(context)
         if !loadedMessages.isEmpty {
@@ -799,7 +1327,7 @@ final class AppState: ObservableObject {
         if let review = await loadWeeklyReview(context) {
             weeklyReview = review
         }
-        cloudSyncStatus = "Cloud loaded. New app events will write to Supabase."
+        cloudSyncStatus = "Cloud loaded as user \(Self.shortID(context.userID)). Visible weigh-ins: \(loadedWeighIns.visibleRows), parsed: \(loadedWeighIns.items.count). New app events will write to Supabase."
     }
 
     private func upsertProfile(_ context: CloudContext) async {
@@ -821,6 +1349,42 @@ final class AppState: ObservableObject {
         cloudSyncStatus = SupabaseGateway.lastEvent
     }
 
+    private func ensureDailyLogID(for date: Date, context: CloudContext) async -> String? {
+        guard !dailyLogSupportUnavailable else { return nil }
+        let day = Self.cloudDate(date)
+        if let cached = cloudDayIDs[day] { return cached }
+
+        let rows = await SupabaseGateway.insert(
+            base: context.base,
+            anonKey: context.anonKey,
+            token: context.token,
+            table: "daily_logs",
+            rows: [[
+                "user_id": context.userID,
+                "day_date": day,
+                "timezone": TimeZone.current.identifier
+            ]],
+            upsertOnConflict: "user_id,day_date"
+        )
+
+        guard let id = rows.first?["id"] as? String else {
+            dailyLogSupportUnavailable = true
+            return nil
+        }
+        cloudDayIDs[day] = id
+        return id
+    }
+
+    private static func withoutDayID(_ row: [String: Any]) -> [String: Any] {
+        var copy = row
+        copy.removeValue(forKey: "day_id")
+        return copy
+    }
+
+    private static func withoutDayID(_ rows: [[String: Any]]) -> [[String: Any]] {
+        rows.map(withoutDayID)
+    }
+
     private func seedTodayTasksIfNeeded(_ context: CloudContext) async {
         let date = Self.cloudDate(Date())
         let existing = await SupabaseGateway.select(
@@ -832,10 +1396,14 @@ final class AppState: ObservableObject {
         )
         guard existing.isEmpty else { return }
 
+        let dayID = await ensureDailyLogID(for: Date(), context: context)
         let rows = tasks.enumerated().map { index, task in
-            taskRow(task, context: context, sortOrder: index)
+            taskRow(task, context: context, sortOrder: index, date: Date(), dayID: dayID)
         }
-        let inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "task_instances", rows: rows)
+        var inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "task_instances", rows: rows)
+        if inserted.isEmpty, dayID != nil {
+            inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "task_instances", rows: Self.withoutDayID(rows))
+        }
         cloudSyncStatus = inserted.isEmpty ? SupabaseGateway.lastEvent : "Seeded today's tasks in Supabase."
         for (index, row) in inserted.enumerated() where tasks.indices.contains(index) {
             tasks[index].cloudID = row["id"] as? String
@@ -850,7 +1418,37 @@ final class AppState: ObservableObject {
             table: "task_instances",
             query: "select=*&task_date=eq.\(Self.cloudDate(Date()))&order=created_at.asc"
         )
-        return rows.compactMap(Self.task(from:))
+        return await deduplicateTasks(rows, context: context)
+    }
+
+    private func deduplicateTasks(_ rows: [[String: Any]], context: CloudContext) async -> [DailyTask] {
+        var keptRows: [[String: Any]] = []
+        var seenKeys = Set<String>()
+        var duplicateIDs: [String] = []
+
+        for row in rows {
+            let key = Self.taskKey(from: row)
+            if seenKeys.insert(key).inserted {
+                keptRows.append(row)
+            } else if let id = row["id"] as? String {
+                duplicateIDs.append(id)
+            }
+        }
+
+        for id in duplicateIDs {
+            await SupabaseGateway.delete(
+                base: context.base,
+                anonKey: context.anonKey,
+                token: context.token,
+                table: "task_instances",
+                match: "id=eq.\(id)"
+            )
+        }
+
+        if !duplicateIDs.isEmpty {
+            cloudSyncStatus = "Cleaned up \(duplicateIDs.count) duplicate task\(duplicateIDs.count == 1 ? "" : "s") from today's list."
+        }
+        return keptRows.compactMap(Self.task(from:))
     }
 
     private func loadMeals(_ context: CloudContext) async -> [MealLog] {
@@ -864,7 +1462,7 @@ final class AppState: ObservableObject {
         return rows.compactMap(Self.meal(from:)).sorted { $0.date < $1.date }
     }
 
-    private func loadWeighIns(_ context: CloudContext) async -> [WeighIn] {
+    private func loadWeighIns(_ context: CloudContext) async -> (items: [WeighIn], visibleRows: Int) {
         let rows = await SupabaseGateway.select(
             base: context.base,
             anonKey: context.anonKey,
@@ -872,7 +1470,7 @@ final class AppState: ObservableObject {
             table: "weigh_ins",
             query: "select=*&order=measured_at.asc&limit=120"
         )
-        return rows.compactMap(Self.weighIn(from:))
+        return (rows.compactMap(Self.weighIn(from:)), rows.count)
     }
 
     private func loadMessages(_ context: CloudContext) async -> [CoachMessage] {
@@ -892,7 +1490,7 @@ final class AppState: ObservableObject {
             anonKey: context.anonKey,
             token: context.token,
             table: "workout_sessions",
-            query: "select=*&order=started_at.desc&limit=30"
+            query: "select=*&order=started_at.desc&limit=90"
         )
         var workouts: [WorkoutSession] = []
         for row in sessions {
@@ -942,12 +1540,19 @@ final class AppState: ObservableObject {
         guard !isLoadingCloudData else { return }
         Task {
             guard let context = await cloudContext else { return }
-            let row = taskRow(task, context: context, sortOrder: tasks.firstIndex(where: { $0.id == task.id }) ?? 0)
+            let dayID = await ensureDailyLogID(for: Date(), context: context)
+            let row = taskRow(task, context: context, sortOrder: tasks.firstIndex(where: { $0.id == task.id }) ?? 0, date: Date(), dayID: dayID)
             if let cloudID = task.cloudID {
-                await SupabaseGateway.update(base: context.base, anonKey: context.anonKey, token: context.token, table: "task_instances", match: "id=eq.\(cloudID)", values: row)
+                let saved = await SupabaseGateway.update(base: context.base, anonKey: context.anonKey, token: context.token, table: "task_instances", match: "id=eq.\(cloudID)", values: row)
+                if !saved, dayID != nil {
+                    await SupabaseGateway.update(base: context.base, anonKey: context.anonKey, token: context.token, table: "task_instances", match: "id=eq.\(cloudID)", values: Self.withoutDayID(row))
+                }
                 cloudSyncStatus = SupabaseGateway.lastEvent
             } else {
-                let inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "task_instances", rows: [row])
+                var inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "task_instances", rows: [row])
+                if inserted.isEmpty, dayID != nil {
+                    inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "task_instances", rows: [Self.withoutDayID(row)])
+                }
                 cloudSyncStatus = inserted.isEmpty ? SupabaseGateway.lastEvent : "Task wrote to Supabase."
                 if let id = inserted.first?["id"] as? String,
                    let index = tasks.firstIndex(where: { $0.id == task.id }) {
@@ -970,14 +1575,20 @@ final class AppState: ObservableObject {
         guard !isLoadingCloudData else { return }
         Task {
             guard let context = await cloudContext else { return }
-            let inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "meals", rows: [[
+            let dayID = await ensureDailyLogID(for: meal.date, context: context)
+            var row: [String: Any] = [
                 "user_id": context.userID,
                 "eaten_at": Self.isoString(meal.date),
                 "title": meal.title,
                 "calories": meal.calories,
                 "protein_grams": meal.protein,
                 "source": "conversation"
-            ]])
+            ]
+            if let dayID { row["day_id"] = dayID }
+            var inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "meals", rows: [row])
+            if inserted.isEmpty, dayID != nil {
+                inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "meals", rows: [Self.withoutDayID(row)])
+            }
             cloudSyncStatus = inserted.isEmpty ? SupabaseGateway.lastEvent : "Meal wrote to Supabase."
             if let id = inserted.first?["id"] as? String,
                let index = meals.firstIndex(where: { $0.id == meal.id }) {
@@ -1025,12 +1636,18 @@ final class AppState: ObservableObject {
         guard !isLoadingCloudData else { return }
         Task {
             guard let context = await cloudContext else { return }
-            let inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "weigh_ins", rows: [[
+            let dayID = await ensureDailyLogID(for: weighIn.date, context: context)
+            var row: [String: Any] = [
                 "user_id": context.userID,
                 "measured_at": Self.isoString(weighIn.date),
                 "pounds": weighIn.pounds,
                 "source": "conversation"
-            ]])
+            ]
+            if let dayID { row["day_id"] = dayID }
+            var inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "weigh_ins", rows: [row])
+            if inserted.isEmpty, dayID != nil {
+                inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "weigh_ins", rows: [Self.withoutDayID(row)])
+            }
             cloudSyncStatus = inserted.isEmpty ? SupabaseGateway.lastEvent : "Weigh-in wrote to Supabase."
             if let id = inserted.first?["id"] as? String,
                let index = weighIns.firstIndex(where: { $0.id == weighIn.id }) {
@@ -1049,20 +1666,80 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func syncDailyMetricSnapshot() {
+        guard !isLoadingCloudData else { return }
+        let snapshot = healthMetrics
+        let completed = tasks.filter(\.isComplete).count
+        let total = max(tasks.count, 1)
+        let completionRate = Double(completed) / Double(total)
+        Task {
+            guard let context = await cloudContext else { return }
+            let dayID = await ensureDailyLogID(for: Date(), context: context)
+            var row: [String: Any] = [
+                "user_id": context.userID,
+                "metric_date": Self.cloudDate(Date()),
+                "steps": snapshot.steps,
+                "active_energy_calories": snapshot.activeEnergy,
+                "workouts_count": snapshot.workoutsToday,
+                "task_completion_rate": completionRate
+            ]
+            if let dayID { row["day_id"] = dayID }
+            var inserted = await SupabaseGateway.insert(
+                base: context.base,
+                anonKey: context.anonKey,
+                token: context.token,
+                table: "daily_metric_snapshots",
+                rows: [row],
+                upsertOnConflict: "user_id,metric_date"
+            )
+            if inserted.isEmpty, dayID != nil {
+                inserted = await SupabaseGateway.insert(
+                    base: context.base,
+                    anonKey: context.anonKey,
+                    token: context.token,
+                    table: "daily_metric_snapshots",
+                    rows: [Self.withoutDayID(row)],
+                    upsertOnConflict: "user_id,metric_date"
+                )
+            }
+            cloudSyncStatus = inserted.isEmpty ? SupabaseGateway.lastEvent : "Daily metrics wrote to Supabase."
+        }
+    }
+
     private func syncExerciseSet(_ set: ExerciseSet, workout: WorkoutSession, dayID: WorkoutDayPlan.ID?, sortOrder: Int) {
         guard !isLoadingCloudData else { return }
         Task {
             guard let context = await cloudContext else { return }
             let workoutID = await ensureCloudWorkoutSession(workout, dayID: dayID, context: context)
             guard let workoutID else { return }
-            let inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "exercise_sets", rows: [[
+            let metadata = Self.exerciseMetadata(for: set.exercise)
+            let category = set.category ?? metadata.category
+            let range = Self.targetRepRange(forCategory: category)
+            let fullRow: [String: Any] = [
+                "user_id": context.userID,
+                "workout_session_id": workoutID,
+                "exercise": set.exercise,
+                "normalized_exercise": set.normalizedExercise ?? metadata.normalized,
+                "exercise_category": category,
+                "reps": set.reps,
+                "weight": set.weight,
+                "sort_order": sortOrder,
+                "target_min_reps": set.targetMinReps ?? range.min,
+                "target_max_reps": set.targetMaxReps ?? range.max,
+                "rir": set.rir.map { $0 } ?? NSNull()
+            ]
+            let legacyRow: [String: Any] = [
                 "user_id": context.userID,
                 "workout_session_id": workoutID,
                 "exercise": set.exercise,
                 "reps": set.reps,
                 "weight": set.weight,
                 "sort_order": sortOrder
-            ]])
+            ]
+            var inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "exercise_sets", rows: [fullRow])
+            if inserted.isEmpty {
+                inserted = await SupabaseGateway.insert(base: context.base, anonKey: context.anonKey, token: context.token, table: "exercise_sets", rows: [legacyRow])
+            }
             cloudSyncStatus = inserted.isEmpty ? SupabaseGateway.lastEvent : "Workout set wrote to Supabase."
             if let id = inserted.first?["id"] as? String,
                let sessionIndex = workouts.firstIndex(where: { Calendar.current.isDate($0.date, inSameDayAs: workout.date) }),
@@ -1081,7 +1758,10 @@ final class AppState: ObservableObject {
         guard !isLoadingCloudData, let cloudID = set.cloudID else { return }
         Task {
             guard let context = await cloudContext else { return }
-            await SupabaseGateway.update(
+            let metadata = Self.exerciseMetadata(for: set.exercise)
+            let category = set.category ?? metadata.category
+            let range = Self.targetRepRange(forCategory: category)
+            let saved = await SupabaseGateway.update(
                 base: context.base,
                 anonKey: context.anonKey,
                 token: context.token,
@@ -1089,10 +1769,29 @@ final class AppState: ObservableObject {
                 match: "id=eq.\(cloudID)",
                 values: [
                     "exercise": set.exercise,
+                    "normalized_exercise": set.normalizedExercise ?? metadata.normalized,
+                    "exercise_category": category,
                     "reps": set.reps,
-                    "weight": set.weight
+                    "weight": set.weight,
+                    "target_min_reps": set.targetMinReps ?? range.min,
+                    "target_max_reps": set.targetMaxReps ?? range.max,
+                    "rir": set.rir.map { $0 } ?? NSNull()
                 ]
             )
+            if !saved {
+                await SupabaseGateway.update(
+                    base: context.base,
+                    anonKey: context.anonKey,
+                    token: context.token,
+                    table: "exercise_sets",
+                    match: "id=eq.\(cloudID)",
+                    values: [
+                        "exercise": set.exercise,
+                        "reps": set.reps,
+                        "weight": set.weight
+                    ]
+                )
+            }
             cloudSyncStatus = SupabaseGateway.lastEvent
         }
     }
@@ -1113,8 +1812,10 @@ final class AppState: ObservableObject {
     }
 
     private func ensureCloudWorkoutSession(_ workout: WorkoutSession, dayID: WorkoutDayPlan.ID?, context: CloudContext) async -> String? {
-        let row = workoutSessionRow(workout, includeNotes: true, context: context)
-        let fallbackRow = workoutSessionRow(workout, includeNotes: false, context: context)
+        let cloudDayID = await ensureDailyLogID(for: workout.date, context: context)
+        let row = workoutSessionRow(workout, includeNotes: true, context: context, dayID: cloudDayID)
+        let noDayRow = Self.withoutDayID(row)
+        let minimalRow = workoutSessionRow(workout, includeNotes: false, context: context, dayID: nil)
 
         if let cloudID = workout.cloudID {
             let saved = await SupabaseGateway.update(
@@ -1126,14 +1827,24 @@ final class AppState: ObservableObject {
                 values: row
             )
             if !saved {
-                await SupabaseGateway.update(
+                let savedWithoutDay = await SupabaseGateway.update(
                     base: context.base,
                     anonKey: context.anonKey,
                     token: context.token,
                     table: "workout_sessions",
                     match: "id=eq.\(cloudID)",
-                    values: fallbackRow
+                    values: noDayRow
                 )
+                if !savedWithoutDay {
+                    await SupabaseGateway.update(
+                        base: context.base,
+                        anonKey: context.anonKey,
+                        token: context.token,
+                        table: "workout_sessions",
+                        match: "id=eq.\(cloudID)",
+                        values: minimalRow
+                    )
+                }
             }
             return cloudID
         }
@@ -1148,14 +1859,24 @@ final class AppState: ObservableObject {
                 values: row
             )
             if !saved {
-                await SupabaseGateway.update(
+                let savedWithoutDay = await SupabaseGateway.update(
                     base: context.base,
                     anonKey: context.anonKey,
                     token: context.token,
                     table: "workout_sessions",
                     match: "id=eq.\(existingID)",
-                    values: fallbackRow
+                    values: noDayRow
                 )
+                if !savedWithoutDay {
+                    await SupabaseGateway.update(
+                        base: context.base,
+                        anonKey: context.anonKey,
+                        token: context.token,
+                        table: "workout_sessions",
+                        match: "id=eq.\(existingID)",
+                        values: minimalRow
+                    )
+                }
             }
             applyCloudWorkoutID(existingID, dayID: dayID, workoutDate: workout.date)
             return existingID
@@ -1174,7 +1895,16 @@ final class AppState: ObservableObject {
                 anonKey: context.anonKey,
                 token: context.token,
                 table: "workout_sessions",
-                rows: [fallbackRow]
+                rows: [noDayRow]
+            )
+        }
+        if inserted.isEmpty {
+            inserted = await SupabaseGateway.insert(
+                base: context.base,
+                anonKey: context.anonKey,
+                token: context.token,
+                table: "workout_sessions",
+                rows: [minimalRow]
             )
         }
         guard let cloudID = inserted.first?["id"] as? String else {
@@ -1185,7 +1915,7 @@ final class AppState: ObservableObject {
         return cloudID
     }
 
-    private func workoutSessionRow(_ workout: WorkoutSession, includeNotes: Bool, context: CloudContext) -> [String: Any] {
+    private func workoutSessionRow(_ workout: WorkoutSession, includeNotes: Bool, context: CloudContext, dayID: String?) -> [String: Any] {
         var row: [String: Any] = [
             "user_id": context.userID,
             "started_at": Self.isoString(workout.date),
@@ -1193,6 +1923,7 @@ final class AppState: ObservableObject {
             "focus": workout.focus,
             "is_complete": workout.isComplete
         ]
+        if let dayID { row["day_id"] = dayID }
         if includeNotes {
             row["coach_notes"] = workout.coachNotes
         }
@@ -1235,10 +1966,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func taskRow(_ task: DailyTask, context: CloudContext, sortOrder: Int) -> [String: Any] {
+    private func taskRow(_ task: DailyTask, context: CloudContext, sortOrder: Int, date: Date, dayID: String?) -> [String: Any] {
         var row: [String: Any] = [
             "user_id": context.userID,
-            "task_date": Self.cloudDate(Date()),
+            "task_date": Self.cloudDate(date),
             "title": task.title,
             "detail": task.detail,
             "system_image": task.systemImage,
@@ -1246,6 +1977,7 @@ final class AppState: ObservableObject {
             "completed_at": task.completedAt.map(Self.isoString) ?? NSNull(),
             "sort_order": sortOrder
         ]
+        if let dayID { row["day_id"] = dayID }
         if let reminderTime = task.reminderTime {
             let parts = Calendar.current.dateComponents([.hour, .minute], from: reminderTime)
             row["local_hour"] = parts.hour
@@ -1255,6 +1987,181 @@ final class AppState: ObservableObject {
             row["local_minute"] = NSNull()
         }
         return row
+    }
+
+    private static func taskKey(from row: [String: Any]) -> String {
+        if let key = row["task_key"] as? String, !key.isEmpty {
+            return key
+        }
+        return taskKey(title: row["title"] as? String ?? "")
+    }
+
+    private static func taskKey(title: String) -> String {
+        title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    }
+
+    private static func normalizedExerciseName(_ rawName: String) -> String {
+        let compact = rawName
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            .lowercased()
+            .replacingOccurrences(of: #"[/_\-]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !compact.isEmpty else { return "Exercise" }
+
+        let aliases: [String: String] = [
+            "bench": "Bench Press",
+            "bench press": "Bench Press",
+            "barbell bench": "Barbell Bench Press",
+            "bb bench": "Barbell Bench Press",
+            "incline bench": "Incline Bench Press",
+            "incline db press": "Incline Dumbbell Press",
+            "db incline press": "Incline Dumbbell Press",
+            "db press": "Dumbbell Press",
+            "dumbbell press": "Dumbbell Press",
+            "ohp": "Overhead Press",
+            "overhead press": "Overhead Press",
+            "shoulder press": "Shoulder Press",
+            "squat": "Back Squat",
+            "back squat": "Back Squat",
+            "front squat": "Front Squat",
+            "deadlift": "Deadlift",
+            "rdl": "Romanian Deadlift",
+            "romanian deadlift": "Romanian Deadlift",
+            "lat pulldown": "Lat Pulldown",
+            "pulldown": "Lat Pulldown",
+            "pull down": "Lat Pulldown",
+            "row": "Row",
+            "barbell row": "Barbell Row",
+            "cable row": "Cable Row",
+            "seated row": "Seated Cable Row",
+            "leg press": "Leg Press",
+            "leg curl": "Leg Curl",
+            "hamstring curl": "Hamstring Curl",
+            "leg extension": "Leg Extension",
+            "calf raise": "Calf Raise",
+            "rope crunch": "Rope Cable Crunch",
+            "rope crunches": "Rope Cable Crunch",
+            "cable crunch": "Cable Crunch",
+            "reverse crunch": "Reverse Crunch",
+            "reverse crunches": "Reverse Crunch",
+            "curl": "Biceps Curl",
+            "bicep curl": "Biceps Curl",
+            "bicep curls": "Biceps Curl",
+            "biceps curl": "Biceps Curl",
+            "biceps curls": "Biceps Curl",
+            "cable curl": "Cable Biceps Curl",
+            "cable curls": "Cable Biceps Curl",
+            "cable bicep curl": "Cable Biceps Curl",
+            "cable bicep curls": "Cable Biceps Curl",
+            "cable biceps curl": "Cable Biceps Curl",
+            "cable biceps curls": "Cable Biceps Curl",
+            "db curl": "Dumbbell Biceps Curl",
+            "db curls": "Dumbbell Biceps Curl",
+            "dumbbell curl": "Dumbbell Biceps Curl",
+            "dumbbell curls": "Dumbbell Biceps Curl",
+            "barbell curl": "Barbell Biceps Curl",
+            "barbell curls": "Barbell Biceps Curl",
+            "tricep pushdown": "Triceps Pushdown",
+            "triceps pushdown": "Triceps Pushdown"
+        ]
+
+        if let alias = aliases[compact] {
+            return alias
+        }
+
+        let expanded = compact
+            .split(separator: " ")
+            .map { word -> String in
+                switch word {
+                case "db": return "Dumbbell"
+                case "bb": return "Barbell"
+                case "ez": return "EZ"
+                case "rdl": return "Romanian Deadlift"
+                default:
+                    return word.prefix(1).uppercased() + word.dropFirst()
+                }
+            }
+            .joined(separator: " ")
+
+        return expanded
+    }
+
+    private static func normalizedExerciseKey(_ rawName: String) -> String {
+        normalizedExerciseName(rawName)
+            .lowercased()
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func comparisonKey(for set: ExerciseSet) -> String {
+        let keys = comparisonKeys(for: set)
+        let displayKey = normalizedExerciseKey(set.exercise)
+        return keys.contains(displayKey) ? displayKey : (keys.first ?? displayKey)
+    }
+
+    private static func comparisonKeys(for set: ExerciseSet) -> Set<String> {
+        var keys: Set<String> = [normalizedExerciseKey(set.exercise)]
+        if let normalizedExercise = set.normalizedExercise {
+            keys.insert(normalizedExerciseKey(normalizedExercise))
+        }
+        return keys
+    }
+
+    private static func exerciseMetadata(for exercise: String) -> (displayName: String, normalized: String, category: String, range: (min: Int, max: Int)) {
+        let displayName = normalizedExerciseName(exercise)
+        let normalized = normalizedExerciseKey(displayName)
+        let category = exerciseCategory(forNormalizedName: normalized)
+        return (displayName, normalized, category, targetRepRange(forCategory: category))
+    }
+
+    private static func exerciseCategory(forNormalizedName name: String) -> String {
+        if name.contains("bench press") || name == "back squat" || name == "front squat" || name == "deadlift" || name == "overhead press" {
+            return "main_compound"
+        }
+        if name.contains("romanian deadlift") || name.contains("leg press") || name.contains("row") || name.contains("pulldown") || name.contains("dumbbell press") || name.contains("incline") {
+            return "secondary_compound"
+        }
+        if name.contains("crunch") || name.contains("plank") || name.contains("abs") {
+            return "abs"
+        }
+        return "accessory"
+    }
+
+    private static func targetRepRange(forCategory category: String) -> (min: Int, max: Int) {
+        switch category {
+        case "main_compound": return (6, 10)
+        case "secondary_compound": return (8, 12)
+        case "abs": return (12, 20)
+        default: return (10, 15)
+        }
+    }
+
+    private static func splitKey(for title: String) -> String {
+        let lower = title.lowercased()
+        if lower.contains("push") { return "Push" }
+        if lower.contains("pull") { return "Pull" }
+        if lower.contains("leg") { return "Legs + Abs" }
+        if lower.contains("cardio") { return "Big Cardio" }
+            return title.isEmpty ? "Training" : title
+    }
+
+    func previousWorkoutForSelectedSplit() -> WorkoutSession? {
+        guard let selected = selectedWorkoutDay else { return nil }
+        let split = Self.splitKey(for: selected.title)
+        let selectedDayStart = Calendar.current.startOfDay(for: selected.date)
+        return workouts
+            .filter { Calendar.current.startOfDay(for: $0.date) < selectedDayStart && Self.splitKey(for: $0.title) == split }
+            .sorted { $0.date > $1.date }
+            .first
+    }
+
+    func splitTitle(for day: WorkoutDayPlan) -> String {
+        Self.splitKey(for: day.title)
     }
 
     private static func task(from row: [String: Any]) -> DailyTask? {
@@ -1286,7 +2193,7 @@ final class AppState: ObservableObject {
     }
 
     private static func weighIn(from row: [String: Any]) -> WeighIn? {
-        guard let pounds = (row["pounds"] as? NSNumber)?.doubleValue else { return nil }
+        guard let pounds = doubleValue(row["pounds"]) else { return nil }
         return WeighIn(
             cloudID: row["id"] as? String,
             date: (row["measured_at"] as? String).flatMap(Self.date(from:)) ?? Date(),
@@ -1320,11 +2227,21 @@ final class AppState: ObservableObject {
 
     private static func exerciseSet(from row: [String: Any]) -> ExerciseSet? {
         guard let exercise = row["exercise"] as? String else { return nil }
+        let displayName = normalizedExerciseName(exercise)
+        let normalized = normalizedExerciseKey(row["normalized_exercise"] as? String ?? displayName)
+        let metadata = exerciseMetadata(for: normalized)
+        let category = row["exercise_category"] as? String ?? metadata.category
+        let range = targetRepRange(forCategory: category)
         return ExerciseSet(
             cloudID: row["id"] as? String,
-            exercise: exercise,
+            exercise: displayName,
+            normalizedExercise: normalized,
+            category: category,
             reps: (row["reps"] as? NSNumber)?.intValue ?? 0,
-            weight: (row["weight"] as? NSNumber)?.intValue ?? 0
+            weight: (row["weight"] as? NSNumber)?.intValue ?? 0,
+            targetMinReps: (row["target_min_reps"] as? NSNumber)?.intValue ?? range.min,
+            targetMaxReps: (row["target_max_reps"] as? NSNumber)?.intValue ?? range.max,
+            rir: (row["rir"] as? NSNumber)?.intValue
         )
     }
 
@@ -1374,5 +2291,112 @@ private extension CoachMessage.Role {
         case "assistant", "system": self = .assistant
         default: return nil
         }
+    }
+}
+
+private enum SupabaseAuthStore {
+    private static let service = "com.leofelix.loop.supabase.auth"
+
+    private enum Account {
+        static let refreshToken = "refresh_token"
+        static let userID = "user_id"
+        static let email = "email"
+    }
+
+    private enum LegacyKey {
+        static let refreshToken = "sb_refresh_token"
+        static let userID = "sb_user_id"
+        static let email = "sb_email"
+    }
+
+    static var refreshToken: String? {
+        read(Account.refreshToken) ?? UserDefaults.standard.string(forKey: LegacyKey.refreshToken)
+    }
+
+    static var userID: String? {
+        read(Account.userID) ?? UserDefaults.standard.string(forKey: LegacyKey.userID)
+    }
+
+    static var email: String? {
+        read(Account.email) ?? UserDefaults.standard.string(forKey: LegacyKey.email)
+    }
+
+    static func store(refreshToken: String, userID: String, email: String?) {
+        write(refreshToken, account: Account.refreshToken)
+        write(userID, account: Account.userID)
+        if let email, !email.isEmpty {
+            write(email, account: Account.email)
+            UserDefaults.standard.set(email, forKey: LegacyKey.email)
+        }
+
+        UserDefaults.standard.set(refreshToken, forKey: LegacyKey.refreshToken)
+        UserDefaults.standard.set(userID, forKey: LegacyKey.userID)
+    }
+
+    static func clear() {
+        [Account.refreshToken, Account.userID, Account.email].forEach(delete)
+        [LegacyKey.refreshToken, LegacyKey.userID, LegacyKey.email].forEach {
+            UserDefaults.standard.removeObject(forKey: $0)
+        }
+    }
+
+    static func migrateFromUserDefaultsIfNeeded() {
+        if read(Account.refreshToken) == nil,
+           let token = UserDefaults.standard.string(forKey: LegacyKey.refreshToken) {
+            write(token, account: Account.refreshToken)
+        }
+        if read(Account.userID) == nil,
+           let id = UserDefaults.standard.string(forKey: LegacyKey.userID) {
+            write(id, account: Account.userID)
+        }
+        if read(Account.email) == nil,
+           let email = UserDefaults.standard.string(forKey: LegacyKey.email) {
+            write(email, account: Account.email)
+        }
+    }
+
+    private static func read(_ account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func write(_ value: String, account: String) {
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+        ]
+
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = query
+            item[kSecValueData as String] = data
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            SecItemAdd(item as CFDictionary, nil)
+        }
+    }
+
+    private static func delete(_ account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }

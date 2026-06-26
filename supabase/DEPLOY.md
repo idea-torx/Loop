@@ -72,13 +72,25 @@ supabase functions deploy daily-plan
 
 ## 8. Point the app at Supabase
 
-In Xcode: **Product → Scheme → Edit Scheme… → Run → Arguments → Environment Variables**,
-add:
+For an installed dev app that works away from your Mac, the Supabase values must be
+embedded in the app's generated Info.plist, not only supplied as Xcode run environment
+variables. Scheme environment variables exist only when Xcode launches the app.
+
+In `NathanCoach.xcodeproj/project.pbxproj`, the generated Info.plist build settings should include:
 
 | Name | Value |
 |------|-------|
-| `SUPABASE_URL` | `https://<YOUR_REF>.supabase.co` |
-| `SUPABASE_ANON_KEY` | the anon/public key from step 1 |
+| `INFOPLIST_KEY_SUPABASE_URL` | `https://<YOUR_REF>.supabase.co` |
+| `INFOPLIST_KEY_SUPABASE_ANON_KEY` | the anon/public key from step 1 |
+
+You can still keep the same values in Xcode's Run scheme for local debugging, but the
+Info.plist values are what make the app functional when launched from the phone home
+screen.
+
+The iOS app also includes a defensive fallback inside `SupabaseGateway`: it checks the
+Xcode environment, generated Info.plist, an on-device config cache, and finally the
+hosted Supabase defaults baked into the app. This keeps the dev-installed phone app
+cloud-capable even after it is launched away from the Mac.
 
 Run the app. Settings → "Cloud & AI" should read **Cloud sync ready · Supabase + Haiku**.
 

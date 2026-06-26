@@ -71,7 +71,7 @@ struct DailyTask: Identifiable {
     }
 
     static let seed = [
-        DailyTask(title: "Morning weigh-in", detail: "Log weight before breakfast", systemImage: "scalemass.fill", isComplete: false, reminderTime: time(8, 45)),
+        DailyTask(title: "Morning weigh-in", detail: "Log weight before breakfast", systemImage: "scalemass.fill", isComplete: false, reminderTime: time(8, 15)),
         DailyTask(title: "Lunch check-in", detail: "Text or photo log", systemImage: "fork.knife", isComplete: false, reminderTime: time(12, 15)),
         DailyTask(title: "Dinner check-in", detail: "Keep it honest, not perfect", systemImage: "takeoutbag.and.cup.and.straw.fill", isComplete: false, reminderTime: time(17, 0)),
         DailyTask(title: "Workout", detail: "Today's lift — log your sets", systemImage: "figure.strengthtraining.traditional", isComplete: false, reminderTime: time(18, 30)),
@@ -104,10 +104,7 @@ struct MealLog: Identifiable {
     var protein: Int
     var imageData: Data?
 
-    static let seed = [
-        MealLog(date: Date(), title: "Greek yogurt, berries, protein coffee", calories: 430, protein: 42),
-        MealLog(date: Date(), title: "Chicken bowl with rice", calories: 720, protein: 55)
-    ]
+    static let seed: [MealLog] = []
 }
 
 struct WorkoutSession: Identifiable {
@@ -143,8 +140,13 @@ struct ExerciseSet: Identifiable {
     let id = UUID()
     var cloudID: String? = nil
     var exercise: String
+    var normalizedExercise: String? = nil
+    var category: String? = nil
     var reps: Int
     var weight: Int
+    var targetMinReps: Int? = nil
+    var targetMaxReps: Int? = nil
+    var rir: Int? = nil
 }
 
 struct WorkoutDayPlan: Identifiable {
@@ -236,13 +238,15 @@ struct WorkoutDayPlan: Identifiable {
 struct HealthMetricSnapshot {
     var steps: Int
     var activeEnergy: Int
+    var workoutsToday: Int
     var workoutsThisWeek: Int
     var healthKitStatus: String
 
     static let seed = HealthMetricSnapshot(
-        steps: 6420,
-        activeEnergy: 486,
-        workoutsThisWeek: 2,
+        steps: 0,
+        activeEnergy: 0,
+        workoutsToday: 0,
+        workoutsThisWeek: 0,
         healthKitStatus: "Not connected"
     )
 }

@@ -9,10 +9,17 @@ struct CoachView: View {
     @State private var showsDrawer = false
     @State private var photoItem: PhotosPickerItem?
     @State private var showsCamera = false
+    @State private var showsPhotoPicker = false
+    @State private var revealTick = 0
+    @State private var generationStartedAt: Date?
+    @State private var revealedMessageIDs: Set<CoachMessage.ID> = []
     @FocusState private var isFocused: Bool
 
     var body: some View {
         ZStack {
+            Color(red: 0.07, green: 0.07, blue: 0.075)
+                .ignoresSafeArea()
+
             VStack(spacing: 0) {
                 topBar
                     .padding(.horizontal)
@@ -25,7 +32,17 @@ struct CoachView: View {
                                 emptyOpenChatState
                             }
                             ForEach(appState.messages) { message in
-                                MessageBubble(message: message)
+                                MessageBubble(
+                                    message: message,
+                                    isAnimating: shouldReveal(message),
+                                    onRevealTick: { revealTick += 1 },
+                                    onRevealComplete: {
+                                        revealedMessageIDs.insert(message.id)
+                                        if generationStartedAt != nil {
+                                            generationStartedAt = nil
+                                        }
+                                    }
+                                )
                                     .id(message.id)
                             }
                             if isResponding {
@@ -35,21 +52,43 @@ struct CoachView: View {
                                 }
                                 .id("typing")
                             }
+                            Color.clear
+                                .frame(height: 1)
+                                .id("chat-bottom")
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 16)
-                        .padding(.bottom, 24)
+                        .padding(.bottom, 18)
                     }
                     .scrollIndicators(.hidden)
                     .scrollDismissesKeyboard(.interactively)
                     .simultaneousGesture(TapGesture().onEnded { isFocused = false })
-                    .onChange(of: appState.messages.count) { _, _ in scrollToEnd(proxy) }
-                    .onChange(of: isResponding) { _, _ in scrollToEnd(proxy) }
-                    .onChange(of: appState.activeConversationID) { _, _ in scrollToEnd(proxy) }
+                    .onAppear {
+                        markExistingMessagesRevealed()
+                        scrollToEnd(proxy, animated: false)
+                        scheduleBottomScroll(proxy, animated: false)
+                    }
+                    .onChange(of: appState.messages.count) { _, _ in scheduleBottomScroll(proxy) }
+                    .onChange(of: isResponding) { _, _ in scheduleBottomScroll(proxy) }
+                    .onChange(of: appState.activeConversationID) { _, _ in
+                        markExistingMessagesRevealed()
+                        scheduleBottomScroll(proxy, animated: false)
+                    }
+                    .onChange(of: revealTick) { _, _ in scrollToEnd(proxy) }
+                    .onChange(of: isFocused) { _, focused in
+                        guard focused else { return }
+                        scheduleKeyboardBottomScroll(proxy)
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                        scheduleKeyboardBottomScroll(proxy)
+                    }
+                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                        scrollToEnd(proxy, animated: false)
+                    }
                 }
 
                 composer
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 20)
                     .padding(.bottom, composerBottomPadding)
                     .animation(.snappy(duration: 0.22), value: isFocused)
             }
@@ -59,6 +98,12 @@ struct CoachView: View {
                     sendMealImage(data)
                 }
                 .ignoresSafeArea()
+            }
+            .sheet(isPresented: $showsPhotoPicker) {
+                CoachPhotoPicker(photoItem: $photoItem)
+                    .preferredColorScheme(.dark)
+                    .presentationDetents([.height(180)])
+                    .presentationDragIndicator(.visible)
             }
             .onChange(of: photoItem) { _, item in
                 Task {
@@ -72,14 +117,56 @@ struct CoachView: View {
         }
     }
 
-    private func scrollToEnd(_ proxy: ScrollViewProxy) {
-        withAnimation(.snappy) {
+    private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        let action = {
             if isResponding {
                 proxy.scrollTo("typing", anchor: .bottom)
-            } else if let last = appState.messages.last {
-                proxy.scrollTo(last.id, anchor: .bottom)
+            } else {
+                proxy.scrollTo("chat-bottom", anchor: .bottom)
             }
         }
+
+        if animated {
+            withAnimation(.snappy, action)
+        } else {
+            action()
+        }
+    }
+
+    private func scheduleBottomScroll(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        scrollToEnd(proxy, animated: animated)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 70_000_000)
+            scrollToEnd(proxy, animated: animated)
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            scrollToEnd(proxy, animated: false)
+        }
+    }
+
+    private func scheduleKeyboardBottomScroll(_ proxy: ScrollViewProxy) {
+        scrollToEnd(proxy)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            scrollToEnd(proxy)
+            try? await Task.sleep(nanoseconds: 260_000_000)
+            scrollToEnd(proxy)
+            try? await Task.sleep(nanoseconds: 420_000_000)
+            scrollToEnd(proxy, animated: false)
+        }
+    }
+
+    private func markExistingMessagesRevealed() {
+        for message in appState.messages where message.role == .assistant {
+            revealedMessageIDs.insert(message.id)
+        }
+    }
+
+    private func shouldReveal(_ message: CoachMessage) -> Bool {
+        guard message.role == .assistant,
+              message.id == appState.messages.last?.id,
+              !revealedMessageIDs.contains(message.id),
+              let generationStartedAt else { return false }
+        return message.createdAt >= generationStartedAt
     }
 
     private var emptyOpenChatState: some View {
@@ -155,14 +242,18 @@ struct CoachView: View {
                 }
                 .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
 
-                PhotosPicker(selection: $photoItem, matching: .images) {
+                Button {
+                    Haptics.light()
+                    isFocused = false
+                    showsPhotoPicker = true
+                } label: {
                     Label("Photo Library", systemImage: "photo")
                 }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 18, weight: .semibold))
                     .foregroundStyle(CoachTheme.Text.muted)
-                    .frame(width: 34, height: 36)
+                    .frame(width: isFocused ? 34 : 30, height: isFocused ? 36 : 32)
             }
             .buttonStyle(.plain)
             .padding(.leading, 10)
@@ -174,14 +265,6 @@ struct CoachView: View {
                 .padding(.vertical, 12)
                 .submitLabel(.send)
                 .onSubmit(send)
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") {
-                            isFocused = false
-                        }
-                    }
-                }
 
             Button {
                 send()
@@ -196,9 +279,10 @@ struct CoachView: View {
             .buttonStyle(.plain)
             .padding(.trailing, 8)
         }
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .frame(minHeight: isFocused ? 48 : 46)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: isFocused ? 18 : 999, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: isFocused ? 18 : 999, style: .continuous)
                 .stroke(Color.white.opacity(isFocused ? 0.18 : 0.08), lineWidth: 1)
         }
     }
@@ -208,7 +292,7 @@ struct CoachView: View {
     }
 
     private var composerBottomPadding: CGFloat {
-        isFocused ? 8 : 96
+        isFocused ? 8 : 72
     }
 
     private func send() {
@@ -217,6 +301,7 @@ struct CoachView: View {
         draft = ""
         Haptics.light()
         isResponding = true
+        generationStartedAt = Date()
         Task {
             await appState.sendCoachMessage(message)
             isResponding = false
@@ -227,6 +312,7 @@ struct CoachView: View {
         let note = trimmedDraft.isEmpty ? nil : trimmedDraft
         Haptics.light()
         isResponding = true
+        generationStartedAt = Date()
         Task {
             await appState.sendMealImageToHaiku(imageData: data, note: note)
             draft = ""
@@ -365,6 +451,9 @@ private struct ConversationDrawer: View {
 
 private struct MessageBubble: View {
     let message: CoachMessage
+    let isAnimating: Bool
+    var onRevealTick: () -> Void = {}
+    var onRevealComplete: () -> Void = {}
     private var isUser: Bool { message.role == .user }
 
     var body: some View {
@@ -372,16 +461,24 @@ private struct MessageBubble: View {
             if isUser {
                 Spacer(minLength: 48)
             } else {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.46))
+                Image("LoopMark")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.white)
                     .frame(width: 28, height: 28)
+                    .padding(5)
                     .background(Color.white.opacity(0.045), in: Circle())
                     .padding(.top, 4)
             }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 5) {
-                MarkdownText(message.text)
+                RevealingMarkdownText(
+                    source: message.text,
+                    isAnimating: isAnimating && !isUser,
+                    onRevealTick: onRevealTick,
+                    onRevealComplete: onRevealComplete
+                )
                     .font(.body)
                     .lineSpacing(3)
                     .foregroundStyle(Color.white.opacity(0.86))
@@ -433,6 +530,119 @@ private struct MarkdownText: View {
             return attributed
         }
         return AttributedString(source)
+    }
+}
+
+private struct RevealingMarkdownText: View {
+    let source: String
+    let isAnimating: Bool
+    var onRevealTick: () -> Void = {}
+    var onRevealComplete: () -> Void = {}
+    @State private var visibleText = ""
+    @State private var revealTask: Task<Void, Never>?
+
+    var body: some View {
+        MarkdownText(displayText)
+            .onAppear { startRevealIfNeeded() }
+            .onChange(of: source) { _, _ in startRevealIfNeeded() }
+            .onDisappear {
+                revealTask?.cancel()
+                revealTask = nil
+            }
+    }
+
+    private var displayText: String {
+        isAnimating ? visibleText : source
+    }
+
+    private func startRevealIfNeeded() {
+        revealTask?.cancel()
+
+        guard isAnimating else {
+            visibleText = source
+            return
+        }
+
+        visibleText = ""
+        let chunks = source.revealChunks
+        revealTask = Task {
+            var buffer = ""
+            for chunk in chunks {
+                if Task.isCancelled { return }
+                buffer += chunk
+                await MainActor.run {
+                    visibleText = buffer
+                    onRevealTick()
+                }
+
+                let delay: UInt64 = chunk.hasSuffix(".")
+                    || chunk.hasSuffix(",")
+                    || chunk.hasSuffix(":")
+                    || chunk.hasSuffix("\n") ? 46_000_000 : 18_000_000
+                try? await Task.sleep(nanoseconds: delay)
+            }
+            await MainActor.run {
+                visibleText = source
+                onRevealComplete()
+            }
+        }
+    }
+}
+
+private struct CoachPhotoPicker: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var photoItem: PhotosPickerItem?
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Choose a meal photo")
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundStyle(CoachTheme.Text.primary)
+
+            PhotosPicker(selection: $photoItem, matching: .images) {
+                HStack(spacing: 10) {
+                    Image(systemName: "photo")
+                    Text("Open Photo Library")
+                }
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .foregroundStyle(.black)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(CoachTheme.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Button("Cancel") { dismiss() }
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .foregroundStyle(CoachTheme.Text.muted)
+        }
+        .padding(20)
+        .background(CoachTheme.background.ignoresSafeArea())
+        .onChange(of: photoItem) { _, item in
+            if item != nil {
+                dismiss()
+            }
+        }
+    }
+}
+
+private extension String {
+    var revealChunks: [String] {
+        var chunks: [String] = []
+        var buffer = ""
+
+        for character in self {
+            buffer.append(character)
+            if character.isWhitespace || [".", ",", ":", ";", "!", "?"].contains(String(character)) {
+                chunks.append(buffer)
+                buffer = ""
+            }
+        }
+
+        if !buffer.isEmpty {
+            chunks.append(buffer)
+        }
+        return chunks
     }
 }
 

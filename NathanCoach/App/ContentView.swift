@@ -1,8 +1,23 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @EnvironmentObject private var appState: AppState
-    @State private var selectedTab: AppTab = .coach
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("lastSelectedAppTab") private var selectedTabRawValue = AppTab.today.rawValue
+    @State private var isKeyboardVisible = false
+
+    private var selectedTab: AppTab {
+        get { AppTab(rawValue: selectedTabRawValue) ?? .today }
+        nonmutating set { selectedTabRawValue = newValue.rawValue }
+    }
+
+    private var selectedTabBinding: Binding<AppTab> {
+        Binding(
+            get: { selectedTab },
+            set: { selectedTab = $0 }
+        )
+    }
 
     var body: some View {
         ZStack {
@@ -22,19 +37,32 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            VStack {
-                Spacer()
-                ZStack(alignment: .bottom) {
-                    BottomMenuBackdrop()
-                    ModernTabBar(selectedTab: $selectedTab)
+            if !isKeyboardVisible {
+                VStack {
+                    Spacer()
+                    ZStack(alignment: .bottom) {
+                        BottomMenuBackdrop()
+                        ModernTabBar(selectedTab: selectedTabBinding)
+                    }
                 }
+                .ignoresSafeArea(.container, edges: .bottom)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .ignoresSafeArea(.container, edges: .bottom)
-            .ignoresSafeArea(.keyboard)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(.snappy(duration: 0.2), value: isKeyboardVisible)
         .task {
             appState.bootstrap()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await appState.refreshDailyState() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            isKeyboardVisible = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            isKeyboardVisible = false
         }
     }
 }
@@ -72,7 +100,7 @@ struct BottomMenuBackdrop: View {
     }
 }
 
-enum AppTab: CaseIterable {
+enum AppTab: String, CaseIterable {
     case today
     case coach
     case workout

@@ -20,14 +20,24 @@ struct TodayView: View {
     private var progress: Double {
         totalCount == 0 ? 0 : Double(completedCount) / Double(totalCount)
     }
+    private var workoutCompleteToday: Bool {
+        appState.healthMetrics.workoutsToday > 0
+            || appState.tasks.contains {
+                $0.isComplete
+                    && ($0.title.localizedCaseInsensitiveContains("workout")
+                        || $0.title.localizedCaseInsensitiveContains("gym")
+                        || $0.title.localizedCaseInsensitiveContains("lift"))
+            }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 stagger(0) { topBar }
-                stagger(1) { heroCard }
-                stagger(2) { taskSection }
-                stagger(3) { insightCard }
+                stagger(1) { insightCard }
+                stagger(2) { heroCard }
+                stagger(3) { taskSection }
+                stagger(4) { sickDayCard }
             }
             .padding(.horizontal)
             .padding(.top, 8)
@@ -49,6 +59,7 @@ struct TodayView: View {
         }
         .onAppear {
             withAnimation { appeared = true }
+            Task { await appState.refreshDailyState() }
         }
     }
 
@@ -103,36 +114,122 @@ struct TodayView: View {
     // MARK: Hero
 
     private var heroCard: some View {
-        HStack(spacing: 20) {
-            ZStack {
-                ProgressRing(progress: appeared ? progress : 0, lineWidth: 13, size: 132)
-                VStack(spacing: 0) {
-                    Text("\(completedCount)")
-                        .font(.system(size: 40, weight: .heavy, design: .rounded))
-                        .foregroundStyle(CoachTheme.Text.primary)
-                        .contentTransition(.numericText())
-                    Text("of \(totalCount) done")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(CoachTheme.Text.muted)
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Daily targets")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachTheme.Text.primary)
+                Spacer()
+                Text(appState.healthMetrics.healthKitStatus)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(CoachTheme.Text.faint)
             }
 
-            VStack(alignment: .leading, spacing: 16) {
-                HeroStat(value: appState.healthMetrics.steps.formatted(), label: "Steps", systemImage: "figure.walk")
-                HeroStat(value: "\(appState.healthMetrics.activeEnergy)", label: "Active cal", systemImage: "flame.fill")
-                HeroStat(value: "\(appState.healthMetrics.workoutsThisWeek)", label: "Workouts", systemImage: "dumbbell.fill")
-            }
+            targetBar(
+                title: "Workout",
+                value: workoutCompleteToday ? "Complete" : "Open",
+                progress: workoutCompleteToday ? 1 : 0,
+                systemImage: "dumbbell.fill"
+            )
+            targetBar(
+                title: "Active calories",
+                value: "\(appState.healthMetrics.activeEnergy)/500",
+                progress: Double(appState.healthMetrics.activeEnergy) / 500,
+                systemImage: "flame.fill"
+            )
+            targetBar(
+                title: "Steps",
+                value: "\(appState.healthMetrics.steps.formatted())/8,000",
+                progress: Double(appState.healthMetrics.steps) / 8_000,
+                systemImage: "figure.walk"
+            )
         }
-        .padding(22)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassPanel(radius: CoachTheme.Radius.xl)
+        .glassPanel(radius: CoachTheme.Radius.lg)
+    }
+
+    private func targetBar(title: String, value: String, progress: Double, systemImage: String) -> some View {
+        let clamped = min(max(progress, 0), 1)
+
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(CoachTheme.accent)
+                    .frame(width: 18)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(CoachTheme.Text.muted)
+                Spacer()
+                Text(value)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(clamped >= 1 ? CoachTheme.accent : CoachTheme.Text.primary)
+                    .contentTransition(.numericText())
+            }
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.08))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [CoachTheme.accent, CoachTheme.ember],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: proxy.size.width * clamped)
+                }
+            }
+            .frame(height: 7)
+        }
     }
 
     // MARK: Tasks
 
+    private var sickDayCard: some View {
+        Button {
+            guard !appState.isSickDay else { return }
+            Haptics.soft()
+            withAnimation(.snappy(duration: 0.35)) {
+                appState.activateSickDay()
+            }
+        } label: {
+            HStack(spacing: 14) {
+                IconTile(systemImage: appState.isSickDay ? "checkmark.circle.fill" : "cross.case.fill", size: 44)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(appState.isSickDay ? "Sick day active" : "Sick day")
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(CoachTheme.Text.primary)
+                    Text(appState.isSickDay ? "Normal targets are skipped. Light walk only if it helps." : "Skip today’s pressure and switch to a light walk.")
+                        .font(.caption)
+                        .foregroundStyle(CoachTheme.Text.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+
+                Image(systemName: appState.isSickDay ? "heart.fill" : "arrow.right")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(appState.isSickDay ? CoachTheme.accent : CoachTheme.Text.faint)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                    .stroke(appState.isSickDay ? CoachTheme.accent.opacity(0.55) : CoachTheme.Stroke.hairline, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.pressable)
+        .disabled(appState.isSickDay)
+    }
+
     private var taskSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SectionHeader(title: "Today's focus", subtitle: "\(completedCount)/\(totalCount) complete · swipe to check off") {
+            SectionHeader(title: "Today's focus", subtitle: "Swipe right to complete · long-press to edit") {
                 Button {
                     Haptics.light()
                     editorSeed = nil
@@ -183,7 +280,7 @@ struct TodayView: View {
         }
 
         let text = "\(task.title) \(task.detail)".lowercased()
-        if text.contains("morning") || text.contains("weigh") || text.contains("breakfast") { return 8 * 60 }
+        if text.contains("morning") || text.contains("weigh") || text.contains("breakfast") { return 8 * 60 + 15 }
         if text.contains("lunch") { return 12 * 60 }
         if text.contains("step") || text.contains("walk") || text.contains("recovery") { return 15 * 60 + 30 }
         if text.contains("dinner") { return 17 * 60 }
@@ -196,15 +293,24 @@ struct TodayView: View {
 
     private var insightCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                IconTile(systemImage: "sparkles", size: 40)
+            HStack(alignment: .top, spacing: 12) {
+                Image("LoopMark")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.white)
+                    .frame(width: 42, height: 24)
+                    .padding(10)
+                    .background(CoachTheme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text(appState.weeklyReview.title)
                         .font(.system(size: 17, weight: .bold, design: .rounded))
-                    Text("Coach insight")
+                    Text("Daily insight")
                         .font(.caption)
                         .foregroundStyle(CoachTheme.accent)
                 }
+                Spacer()
             }
 
             Text(appState.weeklyReview.summary)
@@ -227,15 +333,9 @@ struct TodayView: View {
                 }
             }
         }
-        .padding(22)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassPanel(radius: CoachTheme.Radius.xl)
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(CoachTheme.accent)
-                .frame(width: 4)
-                .padding(.vertical, 22)
-        }
     }
 }
 
@@ -247,40 +347,32 @@ private struct TaskRowView: View {
     let onEdit: () -> Void
     let onDelete: () -> Void
 
-    @State private var drag: CGFloat = 0
-    private let threshold: CGFloat = 72
-
     var body: some View {
-        ZStack(alignment: .leading) {
-            // Reveal behind the row as it slides right (only while dragging).
-            if !task.isComplete && drag > 0 {
-                RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
-                    .fill(CoachTheme.ember)
-                    .overlay(alignment: .leading) {
-                        Image(systemName: drag > threshold ? "checkmark.circle.fill" : "checkmark")
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(.black)
-                            .padding(.leading, 22)
-                            .opacity(Double(min(drag / threshold, 1)))
+        rowContent
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                if !task.isComplete {
+                    Button {
+                        onComplete()
+                    } label: {
+                        Label("Done", systemImage: "checkmark")
                     }
+                    .tint(CoachTheme.ember)
+                }
             }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button {
+                    onEdit()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
+                }
+                .tint(.gray)
 
-            rowContent
-                .offset(x: drag)
-                .gesture(
-                    DragGesture(minimumDistance: 14)
-                        .onChanged { value in
-                            guard !task.isComplete else { return }
-                            drag = max(0, min(value.translation.width, 110))
-                        }
-                        .onEnded { _ in
-                            if drag > threshold && !task.isComplete {
-                                onComplete()
-                            }
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { drag = 0 }
-                        }
-                )
-        }
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
     }
 
     private var rowContent: some View {

@@ -7,6 +7,8 @@ type CallOptions = {
   tools?: Array<Record<string, unknown>>;
   tool_choice?: Record<string, unknown>;
   max_tokens?: number;
+  model?: string;
+  temperature?: number;
 };
 
 export async function callHaiku(
@@ -19,7 +21,7 @@ export async function callHaiku(
     throw new Error("Missing ANTHROPIC_API_KEY");
   }
 
-  const model = Deno.env.get("ANTHROPIC_MODEL") ?? "claude-haiku-4-5";
+  const model = options.model ?? Deno.env.get("ANTHROPIC_MODEL") ?? "claude-haiku-4-5";
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -30,6 +32,7 @@ export async function callHaiku(
     body: JSON.stringify({
       model,
       max_tokens: options.max_tokens ?? 1024,
+      temperature: options.temperature ?? 0.3,
       system,
       messages,
       ...(options.tools ? { tools: options.tools } : {}),

@@ -3,10 +3,13 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var notificationStatus = "Not requested"
     @State private var healthStatus = "Not requested"
     @State private var notificationsOn = false
     @State private var healthOn = false
+    @State private var cloudEmail = ""
+    @State private var cloudPassword = ""
 
     var body: some View {
         ScrollView {
@@ -23,6 +26,14 @@ struct SettingsView: View {
         .background(CoachTheme.background)
         .scrollIndicators(.hidden)
         .safeAreaInset(edge: .top) { topBar }
+        .onAppear {
+            cloudEmail = appState.cloudAuthEmail
+            refreshPermissionStatuses()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            refreshPermissionStatuses()
+        }
     }
 
     private var topBar: some View {
@@ -133,8 +144,7 @@ struct SettingsView: View {
             ) {
                 Task {
                     let granted = await appState.reminderScheduler.requestAuthorization()
-                    notificationsOn = granted
-                    notificationStatus = granted ? "Daily nudges enabled" : "Denied"
+                    await refreshNotificationStatus()
                     if granted {
                         Haptics.success()
                         await appState.reminderScheduler.scheduleDailyNudges(tone: appState.settings.notificationTone)
@@ -152,10 +162,12 @@ struct SettingsView: View {
             ) {
                 Task {
                     let granted = await appState.healthKitService.requestAuthorization()
-                    healthOn = granted
-                    healthStatus = granted ? "Connected" : "Unavailable or denied"
-                    appState.healthMetrics.healthKitStatus = healthStatus
-                    if granted { Haptics.success() }
+                    refreshHealthStatus()
+                    if granted {
+                        await appState.refreshHealthMetrics()
+                        refreshHealthStatus()
+                        Haptics.success()
+                    }
                 }
             }
         }
@@ -185,6 +197,24 @@ struct SettingsView: View {
         }
     }
 
+    private func refreshPermissionStatuses() {
+        refreshHealthStatus()
+        Task { await refreshNotificationStatus() }
+    }
+
+    private func refreshHealthStatus() {
+        let status = appState.healthKitService.authorizationStatus()
+        healthOn = status.isOn
+        healthStatus = status.label
+        appState.healthMetrics.healthKitStatus = status.label
+    }
+
+    private func refreshNotificationStatus() async {
+        let status = await appState.reminderScheduler.authorizationStatus()
+        notificationsOn = status.isOn
+        notificationStatus = status.label
+    }
+
     // MARK: Info
 
     private var infoCard: some View {
@@ -203,8 +233,39 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(CoachTheme.Text.muted)
                     .fixedSize(horizontal: false, vertical: true)
-                GlassPillButton(title: "Test cloud sync", isProminent: true) {
-                    Task { await appState.testCloudSync() }
+                if !appState.cloudUserID.isEmpty {
+                    if appState.cloudAuthEmail.isEmpty {
+                        Text("Legacy anonymous user detected. Create or sign into your permanent account below.")
+                            .font(.caption)
+                            .foregroundStyle(CoachTheme.Text.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Signed in as \(appState.cloudAuthEmail)")
+                            .font(.caption)
+                            .foregroundStyle(CoachTheme.Text.muted)
+                    }
+                    Text("Current Supabase user: \(appState.cloudUserID)")
+                        .font(.caption2)
+                        .foregroundStyle(CoachTheme.Text.faint)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if appState.cloudUserID.isEmpty || appState.cloudAuthEmail.isEmpty {
+                    authFields
+                }
+                HStack(spacing: 10) {
+                    GlassPillButton(title: "Test cloud sync", isProminent: true) {
+                        Task { await appState.testCloudSync() }
+                    }
+                    GlassPillButton(title: "Reload cloud", isProminent: false) {
+                        Task { await appState.reloadCloudData() }
+                    }
+                    if !appState.cloudUserID.isEmpty {
+                        GlassPillButton(title: "Sign out", isProminent: false) {
+                            appState.signOutOfCloud()
+                            cloudPassword = ""
+                        }
+                    }
                 }
             }
 
@@ -223,5 +284,46 @@ struct SettingsView: View {
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassPanel(radius: CoachTheme.Radius.lg)
+    }
+
+    private var authFields: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Email", text: $cloudEmail)
+                .textContentType(.username)
+                .keyboardType(.emailAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .settingsField()
+
+            SecureField("Password", text: $cloudPassword)
+                .textContentType(.password)
+                .settingsField()
+
+            HStack(spacing: 10) {
+                GlassPillButton(title: appState.isCloudSigningIn ? "Signing in..." : "Sign in", isProminent: true) {
+                    Task { await appState.signInToCloud(email: cloudEmail, password: cloudPassword) }
+                }
+                GlassPillButton(title: "Create account", isProminent: false) {
+                    Task { await appState.createCloudAccount(email: cloudEmail, password: cloudPassword) }
+                }
+            }
+            .disabled(appState.isCloudSigningIn)
+        }
+        .padding(.top, 4)
+    }
+}
+
+private extension View {
+    func settingsField() -> some View {
+        self
+            .font(.subheadline)
+            .foregroundStyle(CoachTheme.Text.primary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
+            }
     }
 }

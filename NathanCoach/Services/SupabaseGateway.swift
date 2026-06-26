@@ -1,10 +1,15 @@
 import Foundation
 
-/// Structured macros returned by the analyze-meal Edge Function (Haiku).
+/// Structured nutrition result returned by the analyze-meal Edge Function.
 struct MealMacros {
     let title: String
     let calories: Int
     let protein: Int
+    let shouldLog: Bool
+    let confidence: String
+    let confidenceReason: String
+    let clarifyingQuestions: [String]
+    let notes: String
 }
 
 struct HaikuCoachReply {
@@ -12,7 +17,7 @@ struct HaikuCoachReply {
     let updates: [[String: Any]]
 }
 
-/// An authenticated Supabase session (anonymous user).
+/// An authenticated Supabase session.
 struct SupabaseSession: Sendable {
     let accessToken: String
     let refreshToken: String
@@ -25,10 +30,21 @@ struct SupabaseSession: Sendable {
 /// Networking is exposed as `static` functions taking only Sendable values so the
 /// gateway instance is never sent across an `await` (keeps Swift concurrency happy).
 final class SupabaseGateway {
+    private enum HostedDefaults {
+        static let projectURL = "https://kkejpzjrmrrlndiydocf.supabase.co"
+        static let anonKey = "sb_publishable_qsriyDdvepCWWIz2IBPTfA_tdYn6TmQ"
+    }
+
+    private enum DefaultsKey {
+        static let projectURL = "loop_supabase_url"
+        static let anonKey = "loop_supabase_anon_key"
+    }
+
     struct Configuration {
         var projectURL: URL?
         var anonKey: String?
         var anthropicModel = "claude-haiku-4-5"
+        var source = "Not loaded"
     }
 
     var configuration = Configuration()
@@ -38,44 +54,99 @@ final class SupabaseGateway {
         configuration.projectURL != nil && configuration.anonKey?.isEmpty == false
     }
 
-    /// Load Supabase URL + anon key from the environment (Xcode scheme) or Info.plist.
+    /// Load Supabase URL + anon key from every durable source available to the installed app.
     /// The anon key is a publishable client key; the secret ANTHROPIC_API_KEY lives only
     /// in the Edge Function's secrets, never in the app.
     func loadConfiguration() {
         let env = ProcessInfo.processInfo.environment
-        let urlString = env["SUPABASE_URL"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String
-        let key = env["SUPABASE_ANON_KEY"]
-            ?? Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String
+        let candidates: [(source: String, url: String?, key: String?)] = [
+            (
+                "Xcode run environment",
+                env["SUPABASE_URL"],
+                env["SUPABASE_ANON_KEY"]
+            ),
+            (
+                "Bundled Info.plist",
+                Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String,
+                Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String
+            ),
+            (
+                "On-device config cache",
+                UserDefaults.standard.string(forKey: DefaultsKey.projectURL),
+                UserDefaults.standard.string(forKey: DefaultsKey.anonKey)
+            ),
+            (
+                "Baked hosted defaults",
+                HostedDefaults.projectURL,
+                HostedDefaults.anonKey
+            )
+        ]
 
-        if let urlString, let url = URL(string: urlString) {
+        for candidate in candidates {
+            guard let rawURL = candidate.url?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  let rawKey = candidate.key?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawURL.isEmpty,
+                  !rawKey.isEmpty,
+                  let url = URL(string: rawURL),
+                  url.scheme?.hasPrefix("http") == true else { continue }
+
             configuration.projectURL = url
+            configuration.anonKey = rawKey
+            configuration.source = candidate.source
+            persistConfiguration(url: rawURL, key: rawKey)
+            return
         }
-        configuration.anonKey = key
+
+        configuration = Configuration(source: "Missing Supabase URL/key")
     }
 
     func describeStatus() -> String {
         if isConfigured {
-            return "Cloud sync ready · Supabase + Haiku"
+            return "Cloud sync ready · Supabase + Haiku · \(configuration.source)"
         }
         return "Local prototype mode. Set SUPABASE_URL + SUPABASE_ANON_KEY and deploy the Edge Functions to enable cloud sync."
     }
 
+    private func persistConfiguration(url: String, key: String) {
+        UserDefaults.standard.set(url, forKey: DefaultsKey.projectURL)
+        UserDefaults.standard.set(key, forKey: DefaultsKey.anonKey)
+    }
+
     // MARK: - Auth
 
-    /// Create (or restore) an anonymous session. Requires "Enable anonymous sign-ins" in Supabase Auth.
+    @MainActor
+    static func signInWithPassword(base: URL, anonKey: String, email: String, password: String) async -> SupabaseSession? {
+        var request = authRequest(base: base, anonKey: anonKey, path: "auth/v1/token?grant_type=password")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "email": email,
+            "password": password
+        ])
+        return await sendAuth(request, successMessage: "Signed in to Supabase.")
+    }
+
+    @MainActor
+    static func signUpWithPassword(base: URL, anonKey: String, email: String, password: String) async -> SupabaseSession? {
+        var request = authRequest(base: base, anonKey: anonKey, path: "auth/v1/signup")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "email": email,
+            "password": password
+        ])
+        return await sendAuth(request, successMessage: "Created Supabase account.")
+    }
+
+    /// Legacy anonymous sign-in kept only for debugging older builds.
     @MainActor
     static func signInAnonymously(base: URL, anonKey: String) async -> SupabaseSession? {
         var request = authRequest(base: base, anonKey: anonKey, path: "auth/v1/signup")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["data": [:]] as [String: Any])
-        return await sendAuth(request)
+        return await sendAuth(request, successMessage: "Authenticated anonymous Supabase user.")
     }
 
     @MainActor
     static func refresh(base: URL, anonKey: String, refreshToken: String) async -> SupabaseSession? {
         var request = authRequest(base: base, anonKey: anonKey, path: "auth/v1/token?grant_type=refresh_token")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": refreshToken])
-        return await sendAuth(request)
+        return await sendAuth(request, successMessage: "Supabase session refreshed.")
     }
 
     private static func authRequest(base: URL, anonKey: String, path: String) -> URLRequest {
@@ -87,7 +158,7 @@ final class SupabaseGateway {
     }
 
     @MainActor
-    private static func sendAuth(_ request: URLRequest) async -> SupabaseSession? {
+    private static func sendAuth(_ request: URLRequest, successMessage: String) async -> SupabaseSession? {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
@@ -100,7 +171,7 @@ final class SupabaseGateway {
             let expiresIn = (json["expires_in"] as? NSNumber)?.doubleValue ?? 3600
             let user = json["user"] as? [String: Any]
             let userID = (user?["id"] as? String) ?? ""
-            lastEvent = "Authenticated anonymous Supabase user."
+            lastEvent = successMessage
             return SupabaseSession(
                 accessToken: accessToken,
                 refreshToken: refreshToken,
@@ -232,10 +303,13 @@ final class SupabaseGateway {
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
-    /// Ask the analyze-meal Edge Function (server-side Haiku) to estimate macros.
+    /// Ask the analyze-meal Edge Function (server-side Sonnet) to estimate macros.
     @MainActor
-    static func analyzeMeal(base: URL, anonKey: String, token: String, description: String, imageData: Data?) async -> MealMacros? {
+    static func analyzeMeal(base: URL, anonKey: String, token: String, description: String, imageData: Data?, followUpAnswers: [String] = []) async -> MealMacros? {
         var payload: [String: Any] = ["prompt": description]
+        if !followUpAnswers.isEmpty {
+            payload["follow_up_answers"] = followUpAnswers
+        }
         if let imageData {
             payload["image_base64"] = imageData.base64EncodedString()
             payload["media_type"] = "image/jpeg"
@@ -244,7 +318,17 @@ final class SupabaseGateway {
               let calories = (json["calories"] as? NSNumber)?.intValue,
               let protein = (json["protein"] as? NSNumber)?.intValue else { return nil }
         let title = (json["title"] as? String) ?? "Meal"
-        return MealMacros(title: title, calories: calories, protein: protein)
+        let action = json["action"] as? String ?? "record_meal"
+        return MealMacros(
+            title: title,
+            calories: calories,
+            protein: protein,
+            shouldLog: action == "record_meal",
+            confidence: json["confidence"] as? String ?? "medium",
+            confidenceReason: json["confidence_reason"] as? String ?? "",
+            clarifyingQuestions: json["clarifying_questions"] as? [String] ?? [],
+            notes: json["notes"] as? String ?? ""
+        )
     }
 
     /// Ask the coach-chat Edge Function for a conversational Haiku response.
