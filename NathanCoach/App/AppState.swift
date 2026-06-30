@@ -28,7 +28,13 @@ final class AppState: ObservableObject {
     @Published var selectedWorkoutDayID: WorkoutDayPlan.ID?
     @Published var weighIns: [WeighIn] = []
     @Published var meals: [MealLog] = []
+    @Published var dailyMetrics: [DailyMetricSnapshot] = []
     @Published var healthMetrics = HealthMetricSnapshot.seed
+    @Published var todayEnergy = TodayEnergySnapshot.seed
+    @Published var dailyCoachSnapshot = DailyCoachSnapshot.seed
+    @Published var goalPlan = GoalPlan.defaultCut(startWeight: PTProtocol.latestWeight)
+    @Published var goalProgress = GoalProgress.seed
+    @Published var goalInsight = GoalInsight.seed
     @Published var weeklyReview = WeeklyReview.seed
     @Published var settings = AppSettings()
     @Published var isOnboardingComplete = false
@@ -37,12 +43,15 @@ final class AppState: ObservableObject {
     @Published var cloudAuthEmail = SupabaseAuthStore.email ?? ""
     @Published var isCloudSigningIn = false
     @Published var isSickDay = false
+    @Published var mealClarification: MealClarification?
     @Published private(set) var currentDay = Calendar.current.startOfDay(for: Date())
 
     let coachService = CoachService()
     let reminderScheduler = ReminderScheduler()
     let healthKitService = HealthKitService()
     let metricsService = MetricsService()
+    let energyService = TodayEnergyService()
+    let goalService = GoalService()
     let gateway = SupabaseGateway()
 
     private var session: SupabaseSession?
@@ -242,11 +251,56 @@ final class AppState: ObservableObject {
         selectedWorkoutDayID = day.id
     }
 
+    func updateGoalPlan(_ plan: GoalPlan) {
+        goalPlan = plan
+        refreshGoalState()
+        syncGoalPlan(plan)
+        refreshHomeAfterLocalChange()
+    }
+
+    func refreshGoalState() {
+        goalProgress = goalService.makeProgress(
+            goal: goalPlan,
+            weighIns: weighIns,
+            meals: meals,
+            dailyMetrics: dailyMetrics,
+            health: healthMetrics,
+            today: Date()
+        )
+        goalInsight = goalService.makeInsight(goal: goalPlan, progress: goalProgress)
+    }
+
+    private func defaultGoalPlan() -> GoalPlan {
+        GoalPlan.defaultCut(startWeight: weighIns.last?.pounds ?? PTProtocol.latestWeight, startDate: Date())
+    }
+
+    private func upsertLocalDailyMetricSnapshot() {
+        let snapshot = DailyMetricSnapshot(
+            date: Date(),
+            steps: healthMetrics.steps,
+            activeEnergy: healthMetrics.activeEnergy,
+            workoutsCount: healthMetrics.workoutsToday,
+            taskCompletionRate: taskCompletionRate
+        )
+        if let index = dailyMetrics.firstIndex(where: { Calendar.current.isDate($0.date, inSameDayAs: snapshot.date) }) {
+            dailyMetrics[index] = snapshot
+        } else {
+            dailyMetrics.append(snapshot)
+        }
+        dailyMetrics.sort { $0.date < $1.date }
+    }
+
+    private var taskCompletionRate: Double {
+        let total = max(tasks.count, 1)
+        return Double(tasks.filter(\.isComplete).count) / Double(total)
+    }
+
     func toggleTask(_ task: DailyTask) {
         guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
         tasks[index].isComplete.toggle()
         tasks[index].completedAt = tasks[index].isComplete ? Date() : nil
         syncTask(tasks[index])
+        refreshHomeAfterLocalChange()
     }
 
     // MARK: Editable reminders
@@ -261,6 +315,7 @@ final class AppState: ObservableObject {
         }
         sortTasksForToday()
         rescheduleReminders()
+        refreshHomeAfterLocalChange()
     }
 
     func updateTask(_ task: DailyTask) {
@@ -269,12 +324,14 @@ final class AppState: ObservableObject {
         syncTask(tasks[index])
         sortTasksForToday()
         rescheduleReminders()
+        refreshHomeAfterLocalChange()
     }
 
     func deleteTask(_ task: DailyTask) {
         tasks.removeAll { $0.id == task.id }
         deleteCloudTask(task)
         rescheduleReminders()
+        refreshHomeAfterLocalChange()
     }
 
     func activateSickDay() {
@@ -315,6 +372,7 @@ final class AppState: ObservableObject {
         )
         syncWeeklyReview()
         rescheduleReminders()
+        refreshHomeAfterLocalChange()
     }
 
     func rescheduleReminders() {
@@ -371,6 +429,7 @@ final class AppState: ObservableObject {
         let meal = MealLog(date: Date(), title: title, calories: calories, protein: protein, imageData: imageData)
         meals.append(meal)
         syncMeal(meal)
+        refreshHomeAfterLocalChange()
     }
 
     func updateMeal(_ mealID: MealLog.ID, title: String, calories: Int, protein: Int) {
@@ -379,12 +438,14 @@ final class AppState: ObservableObject {
         meals[index].calories = calories
         meals[index].protein = protein
         syncUpdatedMeal(meals[index])
+        refreshHomeAfterLocalChange()
     }
 
     func deleteMeal(_ mealID: MealLog.ID) {
         guard let index = meals.firstIndex(where: { $0.id == mealID }) else { return }
         let meal = meals.remove(at: index)
         deleteCloudMeal(meal)
+        refreshHomeAfterLocalChange()
     }
 
     var todaysMeals: [MealLog] {
@@ -393,6 +454,29 @@ final class AppState: ObservableObject {
 
     var caloriesToday: Int { todaysMeals.reduce(0) { $0 + $1.calories } }
     var proteinToday: Int { todaysMeals.reduce(0) { $0 + $1.protein } }
+
+    private enum MealSlot: String {
+        case breakfast
+        case lunch
+        case dinner
+        case snack
+        case any
+
+        var displayName: String {
+            switch self {
+            case .breakfast: return "breakfast"
+            case .lunch: return "lunch"
+            case .dinner: return "dinner"
+            case .snack: return "snack"
+            case .any: return "meal"
+            }
+        }
+    }
+
+    private struct MealRepeatRequest {
+        let slot: MealSlot
+        let sourceDayOffset: Int
+    }
 
     func sendCoachMessage(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -413,6 +497,7 @@ final class AppState: ObservableObject {
         if pendingMealLog != nil {
             if ["cancel", "never mind", "nevermind", "skip"].contains(trimmed.lowercased()) {
                 pendingMealLog = nil
+                mealClarification = nil
                 messages.append(CoachMessage(role: .assistant, text: "No problem. I did not log that meal."))
                 syncLatestMessage()
                 return
@@ -427,6 +512,13 @@ final class AppState: ObservableObject {
             logWeighIn(pounds)
             completeTask(matching: "weigh-in")
             let reply = "Logged \(pounds.formatted(.number.precision(.fractionLength(1)))) lb. The trend chart will use this as a real weigh-in, not placeholder data."
+            messages.append(CoachMessage(role: .assistant, text: reply))
+            syncLatestMessage()
+            return
+        }
+
+        if let repeatRequest = mealRepeatRequest(from: trimmed) {
+            let reply = repeatRecentMeal(repeatRequest)
             messages.append(CoachMessage(role: .assistant, text: reply))
             syncLatestMessage()
             return
@@ -468,9 +560,11 @@ final class AppState: ObservableObject {
         let resolved = macros ?? localMealEstimate(description: description)
         if resolved.shouldLog {
             pendingMealLog = nil
+            mealClarification = nil
             logMeal(title: resolved.title, calories: resolved.calories, protein: resolved.protein, imageData: imageData)
         } else {
             pendingMealLog = PendingMealLog(description: description, imageData: imageData, answers: [])
+            updateMealClarification(from: resolved)
         }
         return resolved
     }
@@ -508,9 +602,11 @@ final class AppState: ObservableObject {
         let resolved = macros ?? localMealEstimate(description: pending.description)
         if resolved.shouldLog {
             pendingMealLog = nil
+            mealClarification = nil
             logMeal(title: resolved.title, calories: resolved.calories, protein: resolved.protein, imageData: pending.imageData)
         } else {
             pendingMealLog = PendingMealLog(description: pending.description, imageData: pending.imageData, answers: pending.answers)
+            updateMealClarification(from: resolved)
         }
 
         messages.append(CoachMessage(role: .assistant, text: mealLogReply(for: resolved, source: "Logged")))
@@ -534,6 +630,113 @@ final class AppState: ObservableObject {
             + questions.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: " ")
     }
 
+    func dismissMealClarification() {
+        mealClarification = nil
+    }
+
+    private func updateMealClarification(from macros: MealMacros) {
+        guard let question = macros.clarifyingQuestions.first else {
+            mealClarification = nil
+            return
+        }
+        mealClarification = MealClarification(
+            question: question,
+            options: Array(macros.responseOptions.prefix(3))
+        )
+    }
+
+    private func mealRepeatRequest(from text: String) -> MealRepeatRequest? {
+        let lower = text.lowercased()
+        let hasRepeatIntent = [
+            "same as",
+            "same thing",
+            "same meal",
+            "same lunch",
+            "same dinner",
+            "repeat",
+            "copy",
+            "usual",
+            "again"
+        ].contains { lower.contains($0) }
+        guard hasRepeatIntent else { return nil }
+
+        let mentionsMeal = ["breakfast", "lunch", "dinner", "snack", "meal", "ate", "had", "log"].contains { lower.contains($0) }
+        let mentionsPriorDay = ["yesterday", "last night", "last time", "same as"].contains { lower.contains($0) }
+        guard mentionsMeal || mentionsPriorDay else { return nil }
+
+        let sourceDayOffset = lower.contains("yesterday") || lower.contains("last night") ? 1 : 0
+        return MealRepeatRequest(slot: mealSlot(from: lower), sourceDayOffset: sourceDayOffset)
+    }
+
+    private func repeatRecentMeal(_ request: MealRepeatRequest) -> String {
+        guard let source = previousMeal(matching: request) else {
+            let slot = request.slot.displayName
+            return "I couldn’t find a previous \(slot) to copy yet. Log it once with the details and I’ll be able to repeat it next time."
+        }
+
+        logMeal(title: source.title, calories: source.calories, protein: source.protein, imageData: nil)
+        if request.slot != .any {
+            completeTask(matching: request.slot.displayName)
+        }
+
+        return "Logged the same \(request.slot.displayName): \(source.title) — \(source.calories) cal, \(source.protein)g protein. Today is now \(proteinToday)g protein."
+    }
+
+    private func previousMeal(matching request: MealRepeatRequest) -> MealLog? {
+        let todayStart = Calendar.current.startOfDay(for: currentDay)
+        let priorMeals = meals
+            .filter { $0.date < todayStart }
+            .sorted { $0.date > $1.date }
+
+        if request.sourceDayOffset > 0,
+           let sourceDay = Calendar.current.date(byAdding: .day, value: -request.sourceDayOffset, to: todayStart) {
+            let dayMatches = priorMeals.filter { Calendar.current.isDate($0.date, inSameDayAs: sourceDay) }
+            if let exact = dayMatches.last(where: { mealMatches($0, slot: request.slot) }) {
+                return exact
+            }
+            if request.slot == .any, let fallback = dayMatches.last {
+                return fallback
+            }
+        }
+
+        return priorMeals.first { mealMatches($0, slot: request.slot) }
+    }
+
+    private func mealMatches(_ meal: MealLog, slot: MealSlot) -> Bool {
+        slot == .any || mealSlot(for: meal) == slot
+    }
+
+    private func mealSlot(from lowercasedText: String) -> MealSlot {
+        if lowercasedText.contains("breakfast") { return .breakfast }
+        if lowercasedText.contains("lunch") { return .lunch }
+        if lowercasedText.contains("dinner") { return .dinner }
+        if lowercasedText.contains("snack") { return .snack }
+
+        let hour = Calendar.current.component(.hour, from: Date())
+        switch hour {
+        case 5..<10: return .breakfast
+        case 10..<15: return .lunch
+        case 15..<22: return .dinner
+        default: return .any
+        }
+    }
+
+    private func mealSlot(for meal: MealLog) -> MealSlot {
+        let title = meal.title.lowercased()
+        if title.contains("breakfast") { return .breakfast }
+        if title.contains("lunch") { return .lunch }
+        if title.contains("dinner") { return .dinner }
+        if title.contains("snack") { return .snack }
+
+        let hour = Calendar.current.component(.hour, from: meal.date)
+        switch hour {
+        case 5..<10: return .breakfast
+        case 10..<15: return .lunch
+        case 15..<22: return .dinner
+        default: return .any
+        }
+    }
+
     private func localMealEstimate(description: String) -> MealMacros {
         // Offline fallback when the backend isn't configured.
         let title = description.split(separator: ",").first.map(String.init)?
@@ -546,6 +749,7 @@ final class AppState: ObservableObject {
             confidence: "low",
             confidenceReason: "Offline fallback estimate.",
             clarifyingQuestions: [],
+            responseOptions: [],
             notes: ""
         )
     }
@@ -625,6 +829,13 @@ final class AppState: ObservableObject {
         apply(response)
     }
 
+    func sendExerciseWorkoutMessage(exercise: String, text: String) async {
+        let cleanExercise = exercise.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanExercise.isEmpty, !trimmed.isEmpty else { return }
+        await sendWorkoutMessage("\(cleanExercise) \(trimmed)")
+    }
+
     func sendWorkoutConfigurationMessage(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -698,6 +909,41 @@ final class AppState: ObservableObject {
         let session = workoutSession(from: workoutSchedule[dayIndex])
         upsertLocalWorkoutSession(session)
         syncExerciseSet(set, workout: session, dayID: workoutSchedule[dayIndex].id, sortOrder: workoutSchedule[dayIndex].sets.count - 1)
+        refreshHomeAfterLocalChange()
+    }
+
+    struct ExerciseHistoryEntry: Identifiable {
+        let id = UUID()
+        let date: Date
+        let split: String
+        let title: String
+        let sets: [ExerciseSet]
+
+        var volume: Int {
+            sets.reduce(0) { $0 + ($1.reps * $1.weight) }
+        }
+
+        var summary: String {
+            sets.map { "\($0.weight)×\($0.reps)" }.joined(separator: ", ")
+        }
+    }
+
+    func exerciseHistory(for exercise: String, limit: Int = 8) -> [ExerciseHistoryEntry] {
+        let normalized = Self.exerciseMetadata(for: exercise).normalized
+        return workouts
+            .sorted { $0.date > $1.date }
+            .compactMap { session -> ExerciseHistoryEntry? in
+                let matchingSets = session.sets.filter { Self.comparisonKeys(for: $0).contains(normalized) }
+                guard !matchingSets.isEmpty else { return nil }
+                return ExerciseHistoryEntry(
+                    date: session.date,
+                    split: Self.splitKey(for: session.title),
+                    title: session.title,
+                    sets: matchingSets
+                )
+            }
+            .prefix(limit)
+            .map { $0 }
     }
 
     func updateSet(_ setID: ExerciseSet.ID, exercise: String, reps: Int, weight: Int, rir: Int? = nil) {
@@ -718,6 +964,7 @@ final class AppState: ObservableObject {
         upsertLocalWorkoutSession(session)
         syncWorkoutSession(session, dayID: workoutSchedule[dayIndex].id)
         syncUpdatedExerciseSet(updatedSet)
+        refreshHomeAfterLocalChange()
     }
 
     private func makeExerciseSet(exercise: String, reps: Int, weight: Int, rir: Int?) -> ExerciseSet {
@@ -743,6 +990,7 @@ final class AppState: ObservableObject {
         upsertLocalWorkoutSession(session)
         syncWorkoutSession(session, dayID: workoutSchedule[dayIndex].id)
         deleteCloudExerciseSet(removedSet)
+        refreshHomeAfterLocalChange()
     }
 
     private func updateSelectedWorkoutPlan(title: String, focus: String, notes: String) {
@@ -755,6 +1003,7 @@ final class AppState: ObservableObject {
         let session = workoutSession(from: workoutSchedule[index])
         upsertLocalWorkoutSession(session)
         syncWorkoutSession(session, dayID: workoutSchedule[index].id)
+        refreshHomeAfterLocalChange()
     }
 
     private func updateMealFromCoach(id: String?, keyword: String?, title: String?, calories: Int?, protein: Int?) {
@@ -930,6 +1179,7 @@ final class AppState: ObservableObject {
         weighIns.append(weighIn)
         weighIns.sort { $0.date < $1.date }
         syncWeighIn(weighIn)
+        refreshHomeAfterLocalChange()
         weeklyReview = metricsService.makeWeeklyReview(
             tasks: tasks,
             weighIns: weighIns,
@@ -943,6 +1193,9 @@ final class AppState: ObservableObject {
 
     func refreshHealthMetrics() async {
         healthMetrics = await healthKitService.fetchTodaySnapshot()
+        upsertLocalDailyMetricSnapshot()
+        refreshGoalState()
+        refreshLocalDailyCoachSnapshot()
         weeklyReview = metricsService.makeWeeklyReview(
             tasks: tasks,
             weighIns: weighIns,
@@ -952,11 +1205,71 @@ final class AppState: ObservableObject {
             isSickDay: isSickDay
         )
         syncDailyMetricSnapshot()
+        await refreshDailyCoachSnapshot()
     }
 
     func refreshDailyInsights() async {
         await refreshHealthMetrics()
+        await refreshGoalInsight()
         syncWeeklyReview()
+    }
+
+    private func refreshLocalDailyCoachSnapshot() {
+        let energy = energyService.makeSnapshot(
+            tasks: tasks,
+            meals: meals,
+            workouts: workouts,
+            health: healthMetrics,
+            isSickDay: isSickDay
+        )
+        todayEnergy = energy
+        dailyCoachSnapshot = energyService.makeCoachSnapshot(
+            energy: energy,
+            tasks: tasks,
+            meals: meals,
+            workouts: workouts,
+            health: healthMetrics,
+            selectedWorkout: selectedWorkoutDay,
+            isSickDay: isSickDay
+        )
+    }
+
+    private func refreshHomeAfterLocalChange() {
+        refreshGoalState()
+        refreshLocalDailyCoachSnapshot()
+        Task {
+            await refreshGoalInsight()
+            await refreshDailyCoachSnapshot()
+        }
+    }
+
+    private func refreshGoalInsight() async {
+        guard let context = await cloudContext,
+              let cloudInsight = await SupabaseGateway.goalCoach(
+                base: context.base,
+                anonKey: context.anonKey,
+                token: context.token,
+                context: goalContext()
+              ) else { return }
+        goalInsight = cloudInsight
+    }
+
+    private func refreshDailyCoachSnapshot() async {
+        let fallbackEnergy = todayEnergy
+        let fallbackCoach = dailyCoachSnapshot
+        guard let context = await cloudContext else { return }
+        let payload = dailyCoachContext(energy: fallbackEnergy)
+        if let cloudCoach = await SupabaseGateway.dailyCoach(
+            base: context.base,
+            anonKey: context.anonKey,
+            token: context.token,
+            context: payload
+        ) {
+            dailyCoachSnapshot = cloudCoach
+            await syncDailyCoachSnapshot(cloudCoach, energy: fallbackEnergy, context: context)
+            return
+        }
+        await syncDailyCoachSnapshot(fallbackCoach, energy: fallbackEnergy, context: context)
     }
 
     private func haikuCoachResponse(to text: String) async -> CoachResponse? {
@@ -1002,6 +1315,8 @@ final class AppState: ObservableObject {
                     "protein_grams": $0.protein,
                     "logged_at": Self.isoString($0.date)
                 ] },
+                "recent_meal_history": recentMealHistoryContext(),
+                "yesterday_meals": meals(onDayOffset: 1).map(mealContext),
                 "protein_grams_today": proteinToday,
                 "protein_target_grams": PTProtocol.proteinTargetG,
                 "calories_today": caloriesToday,
@@ -1016,6 +1331,9 @@ final class AppState: ObservableObject {
                 "latest_session": latestSessionContext,
                 "progressive_overload": overloadContext()
             ],
+            "today_energy": todayEnergyContext(todayEnergy),
+            "home_coach": dailyCoachContext(dailyCoachSnapshot),
+            "goal": goalContext(),
             "recent_messages": messages.dropLast().suffix(8).map { [
                 "role": $0.role.cloudValue,
                 "text": $0.text
@@ -1026,6 +1344,170 @@ final class AppState: ObservableObject {
                 "meal_timing": settings.mealTiming
             ]
         ]
+    }
+
+    private func dailyCoachContext(energy: TodayEnergySnapshot) -> [String: Any] {
+        let completedTasks = tasks.filter(\.isComplete)
+        let missedTasks = tasks.filter { !$0.isComplete }
+        let latestWorkout = workouts.sorted { $0.date > $1.date }.first
+        let selectedWorkout = selectedWorkoutDay
+        let habitFramework: [[String: Any]] = tasks.map {
+            [
+                "title": $0.title,
+                "detail": $0.detail,
+                "is_complete": $0.isComplete
+            ]
+        }
+        let user: [String: Any] = [
+            "goal": profile.goal,
+            "training_level": profile.trainingLevel,
+            "habitFramework": habitFramework
+        ]
+        let recovery: [String: Any] = [
+            "sleepDurationMinutes": healthMetrics.sleepMinutes ?? NSNull(),
+            "sleepDurationDeltaVs30d": healthMetrics.sleepDeltaVs30d ?? NSNull(),
+            "hrv": healthMetrics.hrvMilliseconds ?? NSNull(),
+            "hrvDeltaVs30d": healthMetrics.hrvDeltaVs30d ?? NSNull(),
+            "restingHR": healthMetrics.restingHeartRate ?? NSNull(),
+            "restingHRDeltaVs30d": healthMetrics.restingHeartRateDeltaVs30d ?? NSNull(),
+            "respiratoryRate": healthMetrics.respiratoryRate ?? NSNull(),
+            "respiratoryRateDeltaVs30d": healthMetrics.respiratoryRateDeltaVs30d ?? NSNull()
+        ]
+        let activityToday: [String: Any] = [
+            "movePercent": healthMetrics.movePercent ?? NSNull(),
+            "exerciseMinutes": healthMetrics.exerciseMinutes ?? NSNull(),
+            "standHours": healthMetrics.standHours ?? NSNull(),
+            "steps": healthMetrics.steps,
+            "activeEnergyKcal": healthMetrics.activeEnergy,
+            "workoutsCompleted": healthMetrics.workoutsToday
+        ]
+        let trainingLoad: [String: Any] = [
+            "strainToday": healthMetrics.activeEnergy + (healthMetrics.workoutsToday * 120),
+            "hardDaysLast7": healthMetrics.workoutsThisWeek,
+            "plannedWorkoutToday": selectedWorkout.map(Self.workoutDayContext) ?? NSNull(),
+            "latestWorkout": latestWorkout.map(Self.workoutSessionContext) ?? NSNull()
+        ]
+        let nutrition: [String: Any] = [
+            "caloriesToday": caloriesToday,
+            "calorieTarget": PTProtocol.calorieTarget,
+            "proteinToday": proteinToday,
+            "proteinTarget": PTProtocol.proteinTargetG,
+            "mealsLoggedToday": todaysMeals.map { mealContext($0) }
+        ]
+        let habits: [String: Any] = [
+            "completedToday": completedTasks.map { $0.title },
+            "missedToday": missedTasks.map { $0.title },
+            "highestLeverageHabitNow": missedTasks.first?.title ?? NSNull()
+        ]
+        let constraints: [String: Any] = [
+            "isSickDay": isSickDay,
+            "timezone": TimeZone.current.identifier
+        ]
+
+        let payload: [String: Any] = [
+            "updateWindow": Self.coachUpdateWindow(),
+            "user": user,
+            "todaysEnergy": todayEnergyContext(energy),
+            "recovery": recovery,
+            "activityToday": activityToday,
+            "trainingLoad": trainingLoad,
+            "nutrition": nutrition,
+            "habits": habits,
+            "goal": goalContext(),
+            "recommendationConstraints": constraints
+        ]
+        return payload
+    }
+
+    private func goalContext() -> [String: Any] {
+        [
+            "plan": [
+                "title": goalPlan.title,
+                "type": goalPlan.type,
+                "start_date": Self.cloudDate(goalPlan.startDate),
+                "end_date": Self.cloudDate(goalPlan.endDate),
+                "start_weight": goalPlan.startWeight,
+                "target_weight": goalPlan.targetWeight,
+                "target_loss_percent": goalPlan.targetLossPercent,
+                "active_calorie_min": goalPlan.activeCalorieMin,
+                "active_calorie_max": goalPlan.activeCalorieMax,
+                "calorie_target": goalPlan.calorieTarget,
+                "protein_target": goalPlan.proteinTarget,
+                "status": goalPlan.status,
+                "body_profile": bodyProfileContext(goalPlan.bodyProfile)
+            ],
+            "progress": goalProgressContext(goalProgress),
+            "insight": [
+                "summary": goalInsight.summary,
+                "suggestions": goalInsight.suggestions
+            ]
+        ]
+    }
+
+    private func goalProgressContext(_ progress: GoalProgress) -> [String: Any] {
+        [
+            "days_elapsed": progress.daysElapsed,
+            "days_remaining": progress.daysRemaining,
+            "total_days": progress.totalDays,
+            "current_trend_weight": progress.currentTrendWeight ?? NSNull(),
+            "expected_weight_today": progress.expectedWeightToday,
+            "target_weight": progress.targetWeight,
+            "pounds_lost": progress.poundsLost,
+            "pounds_remaining": progress.poundsRemaining,
+            "pace_status": progress.paceStatus,
+            "pace_summary": progress.paceSummary,
+            "seven_day_calories_average": progress.sevenDayCaloriesAverage ?? NSNull(),
+            "seven_day_protein_average": progress.sevenDayProteinAverage ?? NSNull(),
+            "seven_day_active_calories_average": progress.sevenDayActiveCaloriesAverage ?? NSNull(),
+            "estimated_daily_burn": progress.estimatedDailyBurn,
+            "estimated_daily_deficit": progress.estimatedDailyDeficit ?? NSNull(),
+            "deficit_confidence": progress.deficitConfidence,
+            "active_calorie_progress": progress.activeCalorieProgress,
+            "timeline_progress": progress.timelineProgress
+        ]
+    }
+
+    private func bodyProfileContext(_ profile: BodyProfile) -> [String: Any] {
+        [
+            "height_inches": profile.heightInches ?? NSNull(),
+            "weight_source": profile.weightSource,
+            "lean_mass_pounds": profile.leanMassPounds ?? NSNull(),
+            "rmr_estimate": profile.rmrEstimate,
+            "rmr_source": profile.rmrSource
+        ]
+    }
+
+    private func todayEnergyContext(_ energy: TodayEnergySnapshot) -> [String: Any] {
+        [
+            "score": energy.score,
+            "label": energy.label.lowercased(),
+            "confidence": energy.confidence,
+            "primaryDriver": energy.primaryDriver,
+            "secondaryDrivers": energy.secondaryDrivers,
+            "bestMove": energy.bestMove,
+            "expandedExplanation": energy.expandedExplanation
+        ]
+    }
+
+    private func dailyCoachContext(_ snapshot: DailyCoachSnapshot) -> [String: Any] {
+        [
+            "updateWindow": snapshot.updateWindow,
+            "recommendationType": snapshot.recommendationType,
+            "coachRead": snapshot.coachRead,
+            "evidence": snapshot.evidence,
+            "bestNextMove": snapshot.bestNextMove,
+            "habitFocus": snapshot.habitFocus,
+            "avoid": snapshot.avoid,
+            "coachCue": snapshot.coachCue
+        ]
+    }
+
+    private static func coachUpdateWindow(at date: Date = Date()) -> String {
+        switch Calendar.current.component(.hour, from: date) {
+        case 5..<12: return "morning"
+        case 12..<18: return "afternoon"
+        default: return "evening"
+        }
     }
 
     private static func update(fromHaiku raw: [String: Any]) -> CoachAppUpdate? {
@@ -1110,6 +1592,33 @@ final class AppState: ObservableObject {
             "coach_notes": workout.coachNotes,
             "is_complete": workout.isComplete,
             "sets": workout.sets.map(exerciseSetContext)
+        ]
+    }
+
+    private func recentMealHistoryContext() -> [[String: Any]] {
+        meals
+            .filter { $0.date < currentDay || Calendar.current.isDate($0.date, inSameDayAs: currentDay) }
+            .sorted { $0.date > $1.date }
+            .prefix(12)
+            .map(mealContext)
+    }
+
+    private func meals(onDayOffset offset: Int) -> [MealLog] {
+        guard let day = Calendar.current.date(byAdding: .day, value: -offset, to: currentDay) else { return [] }
+        return meals
+            .filter { Calendar.current.isDate($0.date, inSameDayAs: day) }
+            .sorted { $0.date < $1.date }
+    }
+
+    private func mealContext(_ meal: MealLog) -> [String: Any] {
+        [
+            "local_id": meal.id.uuidString,
+            "cloud_id": meal.cloudID ?? "",
+            "title": meal.title,
+            "slot": mealSlot(for: meal).displayName,
+            "calories": meal.calories,
+            "protein_grams": meal.protein,
+            "logged_at": Self.isoString(meal.date)
         ]
     }
 
@@ -1297,6 +1806,17 @@ final class AppState: ObservableObject {
         let loadedWeighIns = await loadWeighIns(context)
         weighIns = loadedWeighIns.items
 
+        let loadedMetrics = await loadDailyMetrics(context)
+        dailyMetrics = loadedMetrics
+
+        if let loadedGoal = await loadGoalPlan(context) {
+            goalPlan = loadedGoal
+        } else {
+            goalPlan = defaultGoalPlan()
+            await upsertGoalPlan(goalPlan, context: context)
+        }
+        refreshGoalState()
+
         let loadedMessages = await loadMessages(context)
         if !loadedMessages.isEmpty {
             conversations = [Conversation(title: "Coach", messages: loadedMessages)]
@@ -1326,6 +1846,10 @@ final class AppState: ObservableObject {
 
         if let review = await loadWeeklyReview(context) {
             weeklyReview = review
+        }
+        if let loadedCoach = await loadDailyCoachSnapshot(context) {
+            todayEnergy = loadedCoach.energy
+            dailyCoachSnapshot = loadedCoach.coach
         }
         cloudSyncStatus = "Cloud loaded as user \(Self.shortID(context.userID)). Visible weigh-ins: \(loadedWeighIns.visibleRows), parsed: \(loadedWeighIns.items.count). New app events will write to Supabase."
     }
@@ -1473,6 +1997,17 @@ final class AppState: ObservableObject {
         return (rows.compactMap(Self.weighIn(from:)), rows.count)
     }
 
+    private func loadDailyMetrics(_ context: CloudContext) async -> [DailyMetricSnapshot] {
+        let rows = await SupabaseGateway.select(
+            base: context.base,
+            anonKey: context.anonKey,
+            token: context.token,
+            table: "daily_metric_snapshots",
+            query: "select=*&order=metric_date.asc&limit=90"
+        )
+        return rows.compactMap(Self.dailyMetric(from:))
+    }
+
     private func loadMessages(_ context: CloudContext) async -> [CoachMessage] {
         let rows = await SupabaseGateway.select(
             base: context.base,
@@ -1518,6 +2053,28 @@ final class AppState: ObservableObject {
             query: "select=*&week_starts_on=eq.\(Self.weekStartDate())&limit=1"
         )
         return rows.first.flatMap(Self.weeklyReview(from:))
+    }
+
+    private func loadGoalPlan(_ context: CloudContext) async -> GoalPlan? {
+        let rows = await SupabaseGateway.select(
+            base: context.base,
+            anonKey: context.anonKey,
+            token: context.token,
+            table: "goal_plans",
+            query: "select=*&status=eq.active&order=created_at.desc&limit=1"
+        )
+        return rows.first.flatMap(Self.goalPlan(from:))
+    }
+
+    private func loadDailyCoachSnapshot(_ context: CloudContext) async -> (energy: TodayEnergySnapshot, coach: DailyCoachSnapshot)? {
+        let rows = await SupabaseGateway.select(
+            base: context.base,
+            anonKey: context.anonKey,
+            token: context.token,
+            table: "daily_coach_snapshots",
+            query: "select=*&day_date=eq.\(Self.cloudDate(Date()))&update_window=eq.\(Self.coachUpdateWindow())&limit=1"
+        )
+        return rows.first.flatMap(Self.dailyCoachSnapshot(from:))
     }
 
     private func syncLatestMessage() {
@@ -1683,6 +2240,17 @@ final class AppState: ObservableObject {
                 "workouts_count": snapshot.workoutsToday,
                 "task_completion_rate": completionRate
             ]
+            row["sleep_minutes"] = snapshot.sleepMinutes ?? NSNull()
+            row["sleep_delta_vs_30d"] = snapshot.sleepDeltaVs30d ?? NSNull()
+            row["hrv_ms"] = snapshot.hrvMilliseconds ?? NSNull()
+            row["hrv_delta_vs_30d"] = snapshot.hrvDeltaVs30d ?? NSNull()
+            row["resting_heart_rate"] = snapshot.restingHeartRate ?? NSNull()
+            row["resting_heart_rate_delta_vs_30d"] = snapshot.restingHeartRateDeltaVs30d ?? NSNull()
+            row["respiratory_rate"] = snapshot.respiratoryRate ?? NSNull()
+            row["respiratory_rate_delta_vs_30d"] = snapshot.respiratoryRateDeltaVs30d ?? NSNull()
+            row["exercise_minutes"] = snapshot.exerciseMinutes ?? NSNull()
+            row["stand_hours"] = snapshot.standHours ?? NSNull()
+            row["move_percent"] = snapshot.movePercent ?? NSNull()
             if let dayID { row["day_id"] = dayID }
             var inserted = await SupabaseGateway.insert(
                 base: context.base,
@@ -1966,6 +2534,92 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func syncGoalPlan(_ plan: GoalPlan) {
+        guard !isLoadingCloudData else { return }
+        Task {
+            guard let context = await cloudContext else { return }
+            await upsertGoalPlan(plan, context: context)
+        }
+    }
+
+    private func upsertGoalPlan(_ plan: GoalPlan, context: CloudContext) async {
+        let row = goalPlanRow(plan, context: context)
+        if let cloudID = plan.cloudID {
+            await SupabaseGateway.update(
+                base: context.base,
+                anonKey: context.anonKey,
+                token: context.token,
+                table: "goal_plans",
+                match: "id=eq.\(cloudID)",
+                values: row
+            )
+            cloudSyncStatus = SupabaseGateway.lastEvent
+        } else {
+            let inserted = await SupabaseGateway.insert(
+                base: context.base,
+                anonKey: context.anonKey,
+                token: context.token,
+                table: "goal_plans",
+                rows: [row]
+            )
+            cloudSyncStatus = inserted.isEmpty ? SupabaseGateway.lastEvent : "Goal plan wrote to Supabase."
+            if let id = inserted.first?["id"] as? String {
+                goalPlan.cloudID = id
+            }
+        }
+    }
+
+    private func goalPlanRow(_ plan: GoalPlan, context: CloudContext) -> [String: Any] {
+        [
+            "user_id": context.userID,
+            "title": plan.title,
+            "goal_type": plan.type,
+            "start_date": Self.cloudDate(plan.startDate),
+            "end_date": Self.cloudDate(plan.endDate),
+            "start_weight": plan.startWeight,
+            "target_loss_percent": plan.targetLossPercent,
+            "target_weight": plan.targetWeight,
+            "active_calorie_min": plan.activeCalorieMin,
+            "active_calorie_max": plan.activeCalorieMax,
+            "calorie_target": plan.calorieTarget,
+            "protein_target": plan.proteinTarget,
+            "status": plan.status,
+            "body_profile": bodyProfileContext(plan.bodyProfile)
+        ]
+    }
+
+    private func syncDailyCoachSnapshot(_ coach: DailyCoachSnapshot, energy: TodayEnergySnapshot, context: CloudContext) async {
+        guard !isLoadingCloudData else { return }
+        let dayID = await ensureDailyLogID(for: Date(), context: context)
+        var row: [String: Any] = [
+            "user_id": context.userID,
+            "day_date": Self.cloudDate(Date()),
+            "update_window": coach.updateWindow,
+            "energy_snapshot": todayEnergyContext(energy),
+            "coach_snapshot": dailyCoachContext(coach)
+        ]
+        if let dayID { row["day_id"] = dayID }
+        var inserted = await SupabaseGateway.insert(
+            base: context.base,
+            anonKey: context.anonKey,
+            token: context.token,
+            table: "daily_coach_snapshots",
+            rows: [row],
+            upsertOnConflict: "user_id,day_date,update_window"
+        )
+        if inserted.isEmpty, dayID != nil {
+            inserted = await SupabaseGateway.insert(
+                base: context.base,
+                anonKey: context.anonKey,
+                token: context.token,
+                table: "daily_coach_snapshots",
+                rows: [Self.withoutDayID(row)],
+                upsertOnConflict: "user_id,day_date,update_window"
+            )
+        }
+        cloudSyncStatus = inserted.isEmpty ? SupabaseGateway.lastEvent : "Daily coach wrote to Supabase."
+    }
+
     private func taskRow(_ task: DailyTask, context: CloudContext, sortOrder: Int, date: Date, dayID: String?) -> [String: Any] {
         var row: [String: Any] = [
             "user_id": context.userID,
@@ -2201,6 +2855,18 @@ final class AppState: ObservableObject {
         )
     }
 
+    private static func dailyMetric(from row: [String: Any]) -> DailyMetricSnapshot? {
+        guard let rawDate = row["metric_date"] as? String else { return nil }
+        return DailyMetricSnapshot(
+            cloudID: row["id"] as? String,
+            date: dateOnly(from: rawDate) ?? Date(),
+            steps: (row["steps"] as? NSNumber)?.intValue ?? 0,
+            activeEnergy: (row["active_energy_calories"] as? NSNumber)?.intValue ?? 0,
+            workoutsCount: (row["workouts_count"] as? NSNumber)?.intValue ?? 0,
+            taskCompletionRate: doubleValue(row["task_completion_rate"])
+        )
+    }
+
     private static func message(from row: [String: Any]) -> CoachMessage? {
         guard let content = row["content"] as? String else { return nil }
         let role = CoachMessage.Role(rawCloudValue: row["role"] as? String) ?? .assistant
@@ -2254,6 +2920,87 @@ final class AppState: ObservableObject {
         )
     }
 
+    private static func goalPlan(from row: [String: Any]) -> GoalPlan? {
+        guard let start = (row["start_date"] as? String).flatMap(Self.dateOnly(from:)),
+              let end = (row["end_date"] as? String).flatMap(Self.dateOnly(from:)),
+              let startWeight = doubleValue(row["start_weight"]) else { return nil }
+        let targetLoss = doubleValue(row["target_loss_percent"]) ?? 0.10
+        let targetWeight = doubleValue(row["target_weight"]) ?? (startWeight * (1 - targetLoss))
+        return GoalPlan(
+            cloudID: row["id"] as? String,
+            title: row["title"] as? String ?? "Cut to September 1",
+            type: row["goal_type"] as? String ?? "cut",
+            startDate: start,
+            endDate: end,
+            startWeight: startWeight,
+            targetLossPercent: targetLoss,
+            targetWeight: targetWeight,
+            activeCalorieMin: (row["active_calorie_min"] as? NSNumber)?.intValue ?? 800,
+            activeCalorieMax: (row["active_calorie_max"] as? NSNumber)?.intValue ?? 1_000,
+            calorieTarget: (row["calorie_target"] as? NSNumber)?.intValue ?? PTProtocol.calorieTarget,
+            proteinTarget: (row["protein_target"] as? NSNumber)?.intValue ?? PTProtocol.proteinTargetG,
+            status: row["status"] as? String ?? "active",
+            bodyProfile: bodyProfile(from: row["body_profile"] as? [String: Any])
+        )
+    }
+
+    private static func bodyProfile(from json: [String: Any]?) -> BodyProfile {
+        guard let json else { return .seed }
+        return BodyProfile(
+            heightInches: doubleValue(json["height_inches"]),
+            weightSource: json["weight_source"] as? String ?? BodyProfile.seed.weightSource,
+            leanMassPounds: doubleValue(json["lean_mass_pounds"]),
+            rmrEstimate: (json["rmr_estimate"] as? NSNumber)?.intValue ?? BodyProfile.seed.rmrEstimate,
+            rmrSource: json["rmr_source"] as? String ?? BodyProfile.seed.rmrSource
+        )
+    }
+
+    private static func dailyCoachSnapshot(from row: [String: Any]) -> (energy: TodayEnergySnapshot, coach: DailyCoachSnapshot)? {
+        guard let energyJSON = row["energy_snapshot"] as? [String: Any],
+              let coachJSON = row["coach_snapshot"] as? [String: Any] else { return nil }
+        return (todayEnergy(from: energyJSON), dailyCoach(from: coachJSON))
+    }
+
+    private static func todayEnergy(from json: [String: Any]) -> TodayEnergySnapshot {
+        TodayEnergySnapshot(
+            score: (json["score"] as? NSNumber)?.intValue ?? TodayEnergySnapshot.seed.score,
+            label: capitalizedLabel(json["label"] as? String ?? TodayEnergySnapshot.seed.label),
+            confidence: doubleValue(json["confidence"]) ?? TodayEnergySnapshot.seed.confidence,
+            primaryDriver: json["primaryDriver"] as? String ?? json["primary_driver"] as? String ?? TodayEnergySnapshot.seed.primaryDriver,
+            secondaryDrivers: stringArray(json["secondaryDrivers"] ?? json["secondary_drivers"]),
+            bestMove: json["bestMove"] as? String ?? json["best_move"] as? String ?? TodayEnergySnapshot.seed.bestMove,
+            expandedExplanation: json["expandedExplanation"] as? String ?? json["expanded_explanation"] as? String ?? TodayEnergySnapshot.seed.expandedExplanation
+        )
+    }
+
+    private static func dailyCoach(from json: [String: Any]) -> DailyCoachSnapshot {
+        DailyCoachSnapshot(
+            updateWindow: json["updateWindow"] as? String ?? json["update_window"] as? String ?? Self.coachUpdateWindow(),
+            recommendationType: json["recommendationType"] as? String ?? json["recommendation_type"] as? String ?? "maintain",
+            coachRead: json["coachRead"] as? String ?? json["coach_read"] as? String ?? DailyCoachSnapshot.seed.coachRead,
+            evidence: stringArray(json["evidence"]),
+            bestNextMove: json["bestNextMove"] as? String ?? json["best_next_move"] as? String ?? DailyCoachSnapshot.seed.bestNextMove,
+            habitFocus: json["habitFocus"] as? String ?? json["habit_focus"] as? String ?? DailyCoachSnapshot.seed.habitFocus,
+            avoid: stringArray(json["avoid"]),
+            coachCue: json["coachCue"] as? String ?? json["coach_cue"] as? String ?? DailyCoachSnapshot.seed.coachCue
+        )
+    }
+
+    private static func stringArray(_ value: Any?) -> [String] {
+        if let strings = value as? [String] { return strings }
+        if let values = value as? [Any] { return values.compactMap { $0 as? String } }
+        return []
+    }
+
+    private static func capitalizedLabel(_ value: String) -> String {
+        switch value.lowercased() {
+        case "high": return "High"
+        case "limited": return "Limited"
+        case "depleted": return "Depleted"
+        default: return "Stable"
+        }
+    }
+
     private static func cloudDate(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
@@ -2274,6 +3021,15 @@ final class AppState: ObservableObject {
 
     private static func date(from string: String) -> Date? {
         ISO8601DateFormatter().date(from: string)
+    }
+
+    private static func dateOnly(from string: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: string)
     }
 }
 

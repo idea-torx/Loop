@@ -107,6 +107,12 @@ struct MealLog: Identifiable {
     static let seed: [MealLog] = []
 }
 
+struct MealClarification: Identifiable {
+    let id = UUID()
+    let question: String
+    let options: [String]
+}
+
 struct WorkoutSession: Identifiable {
     let id = UUID()
     var cloudID: String? = nil
@@ -241,6 +247,17 @@ struct HealthMetricSnapshot {
     var workoutsToday: Int
     var workoutsThisWeek: Int
     var healthKitStatus: String
+    var sleepMinutes: Int? = nil
+    var sleepDeltaVs30d: Int? = nil
+    var hrvMilliseconds: Double? = nil
+    var hrvDeltaVs30d: Double? = nil
+    var restingHeartRate: Double? = nil
+    var restingHeartRateDeltaVs30d: Double? = nil
+    var respiratoryRate: Double? = nil
+    var respiratoryRateDeltaVs30d: Double? = nil
+    var exerciseMinutes: Int? = nil
+    var standHours: Int? = nil
+    var movePercent: Double? = nil
 
     static let seed = HealthMetricSnapshot(
         steps: 0,
@@ -248,6 +265,165 @@ struct HealthMetricSnapshot {
         workoutsToday: 0,
         workoutsThisWeek: 0,
         healthKitStatus: "Not connected"
+    )
+}
+
+struct DailyMetricSnapshot: Identifiable {
+    let id = UUID()
+    var cloudID: String? = nil
+    var date: Date
+    var steps: Int
+    var activeEnergy: Int
+    var workoutsCount: Int
+    var taskCompletionRate: Double?
+}
+
+struct TodayEnergySnapshot {
+    var score: Int
+    var label: String
+    var confidence: Double
+    var primaryDriver: String
+    var secondaryDrivers: [String]
+    var bestMove: String
+    var expandedExplanation: String
+
+    static let seed = TodayEnergySnapshot(
+        score: 64,
+        label: "Stable",
+        confidence: 0.35,
+        primaryDriver: "Waiting on live Apple Health data.",
+        secondaryDrivers: ["Loop can still use meals, tasks, workouts, steps, and active calories."],
+        bestMove: "Start with the next obvious habit and keep intensity controlled.",
+        expandedExplanation: "Today’s Energy will sharpen as HealthKit and logged data come in."
+    )
+}
+
+struct BodyProfile {
+    var heightInches: Double?
+    var weightSource: String
+    var leanMassPounds: Double?
+    var rmrEstimate: Int
+    var rmrSource: String
+
+    static let seed = BodyProfile(
+        heightInches: nil,
+        weightSource: "Latest weigh-in",
+        leanMassPounds: nil,
+        rmrEstimate: 1_800,
+        rmrSource: "Manual estimate"
+    )
+}
+
+struct GoalPlan: Identifiable {
+    let id = UUID()
+    var cloudID: String? = nil
+    var title: String
+    var type: String
+    var startDate: Date
+    var endDate: Date
+    var startWeight: Double
+    var targetLossPercent: Double
+    var targetWeight: Double
+    var activeCalorieMin: Int
+    var activeCalorieMax: Int
+    var calorieTarget: Int
+    var proteinTarget: Int
+    var status: String
+    var bodyProfile: BodyProfile
+
+    static func defaultCut(startWeight: Double, startDate: Date = Date()) -> GoalPlan {
+        let calendar = Calendar.current
+        let end = calendar.date(from: DateComponents(year: 2026, month: 9, day: 1)) ?? calendar.date(byAdding: .day, value: 63, to: startDate) ?? startDate
+        let targetLoss = 0.10
+        return GoalPlan(
+            title: "Cut to September 1",
+            type: "cut",
+            startDate: calendar.startOfDay(for: startDate),
+            endDate: end,
+            startWeight: startWeight,
+            targetLossPercent: targetLoss,
+            targetWeight: startWeight * (1 - targetLoss),
+            activeCalorieMin: 800,
+            activeCalorieMax: 1_000,
+            calorieTarget: PTProtocol.calorieTarget,
+            proteinTarget: PTProtocol.proteinTargetG,
+            status: "active",
+            bodyProfile: .seed
+        )
+    }
+}
+
+struct GoalProgress {
+    var daysElapsed: Int
+    var daysRemaining: Int
+    var totalDays: Int
+    var currentTrendWeight: Double?
+    var expectedWeightToday: Double
+    var targetWeight: Double
+    var poundsLost: Double
+    var poundsRemaining: Double
+    var paceStatus: String
+    var paceSummary: String
+    var sevenDayCaloriesAverage: Int?
+    var sevenDayProteinAverage: Int?
+    var sevenDayActiveCaloriesAverage: Int?
+    var estimatedDailyBurn: Int
+    var estimatedDailyDeficit: Int?
+    var deficitConfidence: String
+    var activeCalorieProgress: Double
+    var timelineProgress: Double
+
+    static let seed = GoalProgress(
+        daysElapsed: 0,
+        daysRemaining: 0,
+        totalDays: 1,
+        currentTrendWeight: nil,
+        expectedWeightToday: 0,
+        targetWeight: 0,
+        poundsLost: 0,
+        poundsRemaining: 0,
+        paceStatus: "Setup",
+        paceSummary: "Set up the cut goal to start tracking pace.",
+        sevenDayCaloriesAverage: nil,
+        sevenDayProteinAverage: nil,
+        sevenDayActiveCaloriesAverage: nil,
+        estimatedDailyBurn: 1_800,
+        estimatedDailyDeficit: nil,
+        deficitConfidence: "low",
+        activeCalorieProgress: 0,
+        timelineProgress: 0
+    )
+}
+
+struct GoalInsight {
+    var summary: String
+    var suggestions: [String]
+
+    static let seed = GoalInsight(
+        summary: "Loop will compare your weight trend, active calories, and logged food against the cut goal as data comes in.",
+        suggestions: ["Keep weigh-ins consistent.", "Hit the active calorie range most days.", "Log meals enough to make deficit math useful."]
+    )
+}
+
+struct DailyCoachSnapshot {
+    var updateWindow: String
+    var recommendationType: String
+    var coachRead: String
+    var evidence: [String]
+    var bestNextMove: String
+    var habitFocus: String
+    var avoid: [String]
+    var coachCue: String
+
+    static let seed = DailyCoachSnapshot(
+        updateWindow: "morning",
+        recommendationType: "maintain",
+        coachRead: "Loop is waiting for today’s signal.",
+        evidence: ["HealthKit and your logs will tighten this read as the day unfolds."],
+        bestNextMove: "Hit the first scheduled habit and keep the loop moving.",
+        habitFocus: "Morning weigh-in",
+        avoid: [],
+        coachCue: "Small start, clean day."
     )
 }
 

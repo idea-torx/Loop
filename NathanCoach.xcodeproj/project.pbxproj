@@ -199,7 +199,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Loop;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Loop uses the camera to analyze meals when you choose to log food by photo.";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Loop reads Apple Health data like weight, steps, active energy, and workouts to personalize coaching.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Loop reads Apple Health data like weight, steps, active energy, workouts, sleep, HRV, and heart-rate trends to personalize coaching.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Loop writes weigh-ins and workout summaries to Apple Health when you allow it.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Loop lets you choose meal photos for Coach to analyze when you decide to upload one.";
 				INFOPLIST_KEY_SUPABASE_ANON_KEY = sb_publishable_qsriyDdvepCWWIz2IBPTfA_tdYn6TmQ;
@@ -227,7 +227,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Loop;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Loop uses the camera to analyze meals when you choose to log food by photo.";
-				INFOPLIST_KEY_NSHealthShareUsageDescription = "Loop reads Apple Health data like weight, steps, active energy, and workouts to personalize coaching.";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Loop reads Apple Health data like weight, steps, active energy, workouts, sleep, HRV, and heart-rate trends to personalize coaching.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Loop writes weigh-ins and workout summaries to Apple Health when you allow it.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Loop lets you choose meal photos for Coach to analyze when you decide to upload one.";
 				INFOPLIST_KEY_SUPABASE_ANON_KEY = sb_publishable_qsriyDdvepCWWIz2IBPTfA_tdYn6TmQ;

@@ -9,6 +9,7 @@ struct MealMacros {
     let confidence: String
     let confidenceReason: String
     let clarifyingQuestions: [String]
+    let responseOptions: [String]
     let notes: String
 }
 
@@ -327,6 +328,7 @@ final class SupabaseGateway {
             confidence: json["confidence"] as? String ?? "medium",
             confidenceReason: json["confidence_reason"] as? String ?? "",
             clarifyingQuestions: json["clarifying_questions"] as? [String] ?? [],
+            responseOptions: json["response_options"] as? [String] ?? [],
             notes: json["notes"] as? String ?? ""
         )
     }
@@ -358,5 +360,58 @@ final class SupabaseGateway {
         }
 
         return nil
+    }
+
+    /// Ask the daily-coach Edge Function for the home screen recommendation layer.
+    @MainActor
+    static func dailyCoach(base: URL, anonKey: String, token: String, context: [String: Any]) async -> DailyCoachSnapshot? {
+        guard let json = await invokeFunction(
+            base: base,
+            anonKey: anonKey,
+            token: token,
+            name: "daily-coach",
+            body: ["context": context]
+        ) else { return nil }
+
+        let output = json["coach"] as? [String: Any] ?? json
+        guard let coachRead = output["coachRead"] as? String ?? output["coach_read"] as? String,
+              let bestNextMove = output["bestNextMove"] as? String ?? output["best_next_move"] as? String else {
+            return nil
+        }
+
+        return DailyCoachSnapshot(
+            updateWindow: output["updateWindow"] as? String ?? output["update_window"] as? String ?? context["updateWindow"] as? String ?? "morning",
+            recommendationType: output["recommendationType"] as? String ?? output["recommendation_type"] as? String ?? "maintain",
+            coachRead: coachRead,
+            evidence: stringArray(output["evidence"]),
+            bestNextMove: bestNextMove,
+            habitFocus: output["habitFocus"] as? String ?? output["habit_focus"] as? String ?? "Consistency",
+            avoid: stringArray(output["avoid"]),
+            coachCue: output["coachCue"] as? String ?? output["coach_cue"] as? String ?? "Keep the loop alive."
+        )
+    }
+
+    /// Ask the goal-coach Edge Function for long-term cut progress insight.
+    @MainActor
+    static func goalCoach(base: URL, anonKey: String, token: String, context: [String: Any]) async -> GoalInsight? {
+        guard let json = await invokeFunction(
+            base: base,
+            anonKey: anonKey,
+            token: token,
+            name: "goal-coach",
+            body: ["context": context]
+        ) else { return nil }
+
+        guard let summary = json["summary"] as? String else { return nil }
+        return GoalInsight(
+            summary: summary,
+            suggestions: stringArray(json["suggestions"])
+        )
+    }
+
+    private static func stringArray(_ value: Any?) -> [String] {
+        if let strings = value as? [String] { return strings }
+        if let values = value as? [Any] { return values.compactMap { $0 as? String } }
+        return []
     }
 }

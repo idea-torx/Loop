@@ -4,17 +4,29 @@ import SwiftUI
 
 struct TrendsView: View {
     @EnvironmentObject private var appState: AppState
+    @State private var selectedPage: TrendsPage = .trends
     @State private var selectedWeighIn: WeighIn?
     @State private var showsMealEntry = false
     @State private var editingMeal: EditableMeal?
     @State private var selectedMeal: MealLog?
+    @State private var editingGoal: EditableGoal?
     @State private var appeared = false
+
+    enum TrendsPage: String, CaseIterable {
+        case trends = "Trends"
+        case goal = "Goal"
+    }
 
     struct EditableMeal: Identifiable {
         let id: MealLog.ID
         var title: String
         var calories: Int
         var protein: Int
+    }
+
+    struct EditableGoal: Identifiable {
+        let id = UUID()
+        var plan: GoalPlan
     }
 
     private var rollingWeights: [WeighIn] {
@@ -40,10 +52,15 @@ struct TrendsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
-                weightHero
-                weightChart
-                nutritionSection
-                insightCard
+                pagePicker
+                if selectedPage == .trends {
+                    weightHero
+                    weightChart
+                    nutritionSection
+                    insightCard
+                } else {
+                    goalPage
+                }
             }
             .padding(.horizontal)
             .padding(.top, 8)
@@ -83,6 +100,15 @@ struct TrendsView: View {
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
         }
+        .sheet(item: $editingGoal) { draft in
+            GoalEditSheet(draft: draft.plan) { updated in
+                Haptics.success()
+                appState.updateGoalPlan(updated)
+            }
+            .preferredColorScheme(.dark)
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
         .onAppear { withAnimation(.easeOut(duration: 0.6)) { appeared = true } }
     }
 
@@ -96,6 +122,30 @@ struct TrendsView: View {
                 .font(.system(size: 32, weight: .bold, design: .rounded))
         }
         .padding(.top, 8)
+    }
+
+    private var pagePicker: some View {
+        HStack(spacing: 8) {
+            ForEach(TrendsPage.allCases, id: \.self) { page in
+                Button {
+                    Haptics.light()
+                    withAnimation(.snappy(duration: 0.25)) {
+                        selectedPage = page
+                    }
+                } label: {
+                    Text(page.rawValue)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(selectedPage == page ? .white : CoachTheme.Text.muted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(selectedPage == page ? CoachTheme.accent.opacity(0.24) : Color.white.opacity(0.04), in: Capsule())
+                }
+                .buttonStyle(.pressable)
+            }
+        }
+        .padding(4)
+        .background(Color.white.opacity(0.05), in: Capsule())
+        .overlay { Capsule().stroke(CoachTheme.Stroke.hairline, lineWidth: 1) }
     }
 
     // MARK: Weight
@@ -381,6 +431,237 @@ struct TrendsView: View {
         return "\(target - protein)g protein to go"
     }
 
+    // MARK: Goal
+
+    private var goalPage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            goalHero
+            goalTimelineChart
+            goalAverages
+            goalProfile
+            goalInsightCard
+        }
+    }
+
+    private var goalHero: some View {
+        let goal = appState.goalPlan
+        let progress = appState.goalProgress
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(goal.title)
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                    Text("Cut · \(goal.startDate.formatted(.dateTime.month(.abbreviated).day())) to \(goal.endDate.formatted(.dateTime.month(.abbreviated).day()))")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(CoachTheme.Text.muted)
+                }
+                Spacer()
+                Button {
+                    Haptics.light()
+                    editingGoal = EditableGoal(plan: goal)
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(CoachTheme.accent)
+                        .frame(width: 36, height: 36)
+                        .glassEffect(.regular.interactive(), in: Circle())
+                }
+                .buttonStyle(.pressable)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(progress.paceStatus)
+                    .font(.system(size: 36, weight: .heavy, design: .rounded))
+                    .foregroundStyle(goalStatusColor(progress.paceStatus))
+                Spacer()
+                Text("\(progress.daysRemaining)d left")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(CoachTheme.Text.muted)
+            }
+
+            Text(progress.paceSummary)
+                .font(.subheadline)
+                .foregroundStyle(CoachTheme.Text.muted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(CoachTheme.Fill.medium)
+                    Capsule()
+                        .fill(LinearGradient(colors: [CoachTheme.flame, CoachTheme.ember], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: proxy.size.width * min(max(progress.timelineProgress, 0), 1))
+                }
+            }
+            .frame(height: 9)
+
+            HStack {
+                detailMetric(title: "Trend", value: progress.currentTrendWeight.map { "\($0.formatted(.number.precision(.fractionLength(1)))) lb" } ?? "--", systemImage: "chart.line.uptrend.xyaxis")
+                detailMetric(title: "Target", value: "\(goal.targetWeight.formatted(.number.precision(.fractionLength(1)))) lb", systemImage: "target")
+                detailMetric(title: "Left", value: "\(progress.poundsRemaining.formatted(.number.precision(.fractionLength(1)))) lb", systemImage: "arrow.down")
+            }
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassPanel(radius: CoachTheme.Radius.xl)
+    }
+
+    private var goalTimelineChart: some View {
+        let goal = appState.goalPlan
+        let progress = appState.goalProgress
+        let current = progress.currentTrendWeight ?? goal.startWeight
+        let domainPadding = max(1.0, abs(goal.startWeight - goal.targetWeight) * 0.25)
+        let lower = min(goal.targetWeight, current, progress.expectedWeightToday) - domainPadding
+        let upper = max(goal.startWeight, current, progress.expectedWeightToday) + domainPadding
+
+        return VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Goal line", subtitle: "Current trend vs expected pace")
+            Chart {
+                LineMark(x: .value("Date", goal.startDate), y: .value("Weight", goal.startWeight))
+                    .foregroundStyle(CoachTheme.Text.faint)
+                    .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
+                LineMark(x: .value("Date", goal.endDate), y: .value("Weight", goal.targetWeight))
+                    .foregroundStyle(CoachTheme.Text.faint)
+                    .lineStyle(StrokeStyle(lineWidth: 2, dash: [5, 5]))
+
+                PointMark(x: .value("Date", Date()), y: .value("Weight", current))
+                    .foregroundStyle(CoachTheme.flame)
+                    .symbolSize(120)
+                PointMark(x: .value("Date", Date()), y: .value("Expected", progress.expectedWeightToday))
+                    .foregroundStyle(CoachTheme.accent)
+                    .symbolSize(90)
+            }
+            .chartYScale(domain: lower...upper)
+            .chartYAxis {
+                AxisMarks { _ in
+                    AxisGridLine().foregroundStyle(CoachTheme.Stroke.hairline)
+                    AxisValueLabel().foregroundStyle(CoachTheme.Text.faint)
+                }
+            }
+            .chartXAxis {
+                AxisMarks { _ in
+                    AxisValueLabel(format: .dateTime.month().day(), centered: true)
+                        .foregroundStyle(CoachTheme.Text.faint)
+                }
+            }
+            .frame(height: 190)
+        }
+        .padding(20)
+        .glassPanel(radius: CoachTheme.Radius.lg)
+    }
+
+    private var goalAverages: some View {
+        let goal = appState.goalPlan
+        let progress = appState.goalProgress
+        return VStack(alignment: .leading, spacing: 14) {
+            SectionHeader(title: "Last 7 days", subtitle: "Deficit confidence: \(progress.deficitConfidence)")
+            goalBar(title: "Active calories", value: progress.sevenDayActiveCaloriesAverage, target: goal.activeCalorieMin, suffix: "", cap: goal.activeCalorieMax)
+            goalBar(title: "Calories eaten", value: progress.sevenDayCaloriesAverage, target: goal.calorieTarget, suffix: "", cap: max(goal.calorieTarget, 1))
+            goalBar(title: "Protein", value: progress.sevenDayProteinAverage, target: goal.proteinTarget, suffix: "g", cap: goal.proteinTarget)
+            HStack {
+                detailMetric(title: "Burn today", value: "\(progress.estimatedDailyBurn)", systemImage: "flame")
+                detailMetric(title: "Deficit", value: progress.estimatedDailyDeficit.map { "\($0)" } ?? "--", systemImage: "minus.circle")
+            }
+        }
+        .padding(20)
+        .glassPanel(radius: CoachTheme.Radius.lg)
+    }
+
+    private func goalBar(title: String, value: Int?, target: Int, suffix: String, cap: Int) -> some View {
+        let actual = value ?? 0
+        let progress = cap == 0 ? 0 : min(1, Double(actual) / Double(cap))
+        return VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(CoachTheme.Text.muted)
+                Spacer()
+                Text(value.map { "\($0.formatted())\(suffix) / \(target.formatted())\(suffix)" } ?? "No data")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(CoachTheme.Text.primary)
+            }
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(CoachTheme.Fill.medium)
+                    Capsule()
+                        .fill(CoachTheme.accent)
+                        .frame(width: max(6, proxy.size.width * progress))
+                }
+            }
+            .frame(height: 8)
+        }
+    }
+
+    private var goalProfile: some View {
+        let profile = appState.goalPlan.bodyProfile
+        return VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Body profile", subtitle: profile.rmrSource)
+            HStack {
+                detailMetric(title: "RMR", value: "\(profile.rmrEstimate)", systemImage: "bolt.heart")
+                detailMetric(title: "Height", value: profile.heightInches.map { "\($0.formatted(.number.precision(.fractionLength(1)))) in" } ?? "--", systemImage: "ruler")
+                detailMetric(title: "Lean mass", value: profile.leanMassPounds.map { "\($0.formatted(.number.precision(.fractionLength(1)))) lb" } ?? "--", systemImage: "figure.strengthtraining.traditional")
+            }
+        }
+        .padding(20)
+        .glassPanel(radius: CoachTheme.Radius.lg)
+    }
+
+    private var goalInsightCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionHeader(title: "Goal coach", subtitle: "Cut read")
+            Text(appState.goalInsight.summary)
+                .font(.subheadline)
+                .foregroundStyle(CoachTheme.Text.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(appState.goalInsight.suggestions, id: \.self) { suggestion in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(CoachTheme.accent)
+                        .padding(.top, 2)
+                    Text(suggestion)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.85))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(20)
+        .glassPanel(radius: CoachTheme.Radius.lg)
+    }
+
+    private func goalStatusColor(_ status: String) -> Color {
+        switch status.lowercased() {
+        case "on track": return .green
+        case "watch": return CoachTheme.accent
+        case "behind": return CoachTheme.flame
+        default: return CoachTheme.Text.faint
+        }
+    }
+
+    private func detailMetric(title: String, value: String, systemImage: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(CoachTheme.accent)
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(CoachTheme.Text.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .tracking(0.7)
+                .foregroundStyle(CoachTheme.Text.faint)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
+        }
+    }
+
     // MARK: Insight
 
     private var insightCard: some View {
@@ -556,6 +837,128 @@ private struct MealEditSheet: View {
                 }
             }
         }
+    }
+}
+
+private struct GoalEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var plan: GoalPlan
+    let onSave: (GoalPlan) -> Void
+
+    init(draft: GoalPlan, onSave: @escaping (GoalPlan) -> Void) {
+        _plan = State(initialValue: draft)
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    field("Goal title") {
+                        TextField("Cut to September 1", text: $plan.title)
+                            .textFieldStyle(.plain)
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Timeline")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                        DatePicker("End date", selection: $plan.endDate, displayedComponents: .date)
+                            .tint(CoachTheme.accent)
+                        Stepper("Target loss: \(Int((plan.targetLossPercent * 100).rounded()))%", value: $plan.targetLossPercent, in: 0.03...0.20, step: 0.01)
+                            .onChange(of: plan.targetLossPercent) { _, newValue in
+                                plan.targetWeight = plan.startWeight * (1 - newValue)
+                            }
+                        Stepper("Start weight: \(plan.startWeight.formatted(.number.precision(.fractionLength(1)))) lb", value: $plan.startWeight, in: 80...400, step: 0.1)
+                            .onChange(of: plan.startWeight) { _, newValue in
+                                plan.targetWeight = newValue * (1 - plan.targetLossPercent)
+                            }
+                    }
+                    .goalSettingsBlock()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Daily targets")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                        Stepper("Active min: \(plan.activeCalorieMin)", value: $plan.activeCalorieMin, in: 0...2000, step: 25)
+                        Stepper("Active max: \(plan.activeCalorieMax)", value: $plan.activeCalorieMax, in: max(plan.activeCalorieMin, 0)...2500, step: 25)
+                        Stepper("Calories: \(plan.calorieTarget)", value: $plan.calorieTarget, in: 1200...4000, step: 25)
+                        Stepper("Protein: \(plan.proteinTarget)g", value: $plan.proteinTarget, in: 80...260, step: 5)
+                    }
+                    .goalSettingsBlock()
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Body profile")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                        Stepper("RMR: \(plan.bodyProfile.rmrEstimate)", value: $plan.bodyProfile.rmrEstimate, in: 1200...2600, step: 25)
+                        Stepper("Height: \(plan.bodyProfile.heightInches.map { $0.formatted(.number.precision(.fractionLength(1))) } ?? "--") in", value: heightBinding, in: 48...84, step: 0.5)
+                        Stepper("Lean mass: \(plan.bodyProfile.leanMassPounds.map { $0.formatted(.number.precision(.fractionLength(1))) } ?? "--") lb", value: leanMassBinding, in: 80...240, step: 1)
+                    }
+                    .goalSettingsBlock()
+                }
+                .padding()
+            }
+            .background(CoachTheme.background.ignoresSafeArea())
+            .navigationTitle("Edit Goal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        plan.targetWeight = plan.startWeight * (1 - plan.targetLossPercent)
+                        onSave(plan)
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private var heightBinding: Binding<Double> {
+        Binding(
+            get: { plan.bodyProfile.heightInches ?? 70 },
+            set: { plan.bodyProfile.heightInches = $0 }
+        )
+    }
+
+    private var leanMassBinding: Binding<Double> {
+        Binding(
+            get: { plan.bodyProfile.leanMassPounds ?? 135 },
+            set: {
+                plan.bodyProfile.leanMassPounds = $0
+                plan.bodyProfile.rmrEstimate = Int((370 + (21.6 * ($0 / 2.20462))).rounded())
+                plan.bodyProfile.rmrSource = "Lean-mass estimate"
+            }
+        )
+    }
+
+    private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(CoachTheme.Text.faint)
+            content()
+                .padding(14)
+                .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                        .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
+                }
+        }
+    }
+}
+
+private extension View {
+    func goalSettingsBlock() -> some View {
+        self
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.lg, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: CoachTheme.Radius.lg, style: .continuous)
+                    .stroke(CoachTheme.Stroke.hairline, lineWidth: 1)
+            }
     }
 }
 
