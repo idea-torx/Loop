@@ -64,6 +64,8 @@ supabase secrets set ANTHROPIC_MODEL=claude-haiku-4-5
 ```sh
 supabase functions deploy analyze-meal
 supabase functions deploy coach-chat
+supabase functions deploy daily-coach
+supabase functions deploy goal-coach
 supabase functions deploy weekly-review
 supabase functions deploy daily-plan
 ```

@@ -18,9 +18,13 @@ Do not expose private chain-of-thought. Only return the tool call.
 - Food identification is usually easier than portion size. Portion size and hidden ingredients are the main error sources.
 - Hidden ingredients include cooking oil, butter, sauces, dressings, cheese, sugar, sweetened drinks, and anything inside a wrap, sandwich, bowl, stew, or salad.
 - Never invent facts not visible in the image or supplied by Leo.
+- Leo's explicit nutrition numbers are authoritative. If he states calories, protein, serving weight, or a brand label, treat that as a constraint, not as something to re-estimate.
+- If Leo explicitly gives protein grams, use that exact protein number in the final tool call. Do not lower it because the photo or your generic estimate disagrees.
+- If Leo gives protein but not calories, estimate calories around the described food and record the meal; do not block logging just to verify the protein number.
 - When a missing detail would materially change calories or protein, ask follow-up questions instead of logging a confident-looking guess.
 - Photo logging must be extra conservative: ask if important food items may be off-camera, hidden, or not visible.
 - Ask 1-3 short questions at a time, most important first. If still confused after Leo answers, ask again.
+- When asking a follow-up question, also generate exactly three likely tappable answers for the most important question. Order them from least healthy / highest-calorie likely outcome to healthiest / lowest-calorie likely outcome. Make each option a complete first-person answer Leo can send directly, e.g. "The cup has Sprite in it", "The cup has Diet Sprite", "The cup has water".
 - If the description/photo is sufficient, log it. If it is ambiguous, return best estimates but set action to "ask_follow_up" so the app does not save yet.
 </core_principles>
 
@@ -46,6 +50,7 @@ Do not ask about tiny details that barely affect totals.
 
 <accuracy_rules>
 - Prefer Leo's supplied weights, brands, preparation details, and corrections over the image.
+- Do not ask Leo to confirm nutrition numbers he already supplied. Ask only about truly missing items, such as oil, sauce, drink size, or off-camera food.
 - Give whole-number estimates and sanity-check macros against calories.
 - Confidence is "high" only for simple, clearly visible food with scale or strong text details.
 - Confidence is "low" for mixed/layered dishes, large portions, unclear prep, no scale, or uncertain cuisine.
@@ -75,6 +80,11 @@ const tool = {
         items: { type: "string" },
         description: "One to three short questions, empty when action is record_meal.",
       },
+      response_options: {
+        type: "array",
+        items: { type: "string" },
+        description: "Exactly three complete tappable answers for the most important clarifying question, ordered least healthy to healthiest. Empty when action is record_meal.",
+      },
       visible_components: {
         type: "array",
         items: { type: "string" },
@@ -90,6 +100,7 @@ const tool = {
       "confidence",
       "confidence_reason",
       "clarifying_questions",
+      "response_options",
       "visible_components",
       "assumptions",
       "notes",
@@ -106,11 +117,13 @@ serve(async (req) => {
     const body = await req.json();
     const prompt = body.prompt ?? body.text ?? "Estimate this meal.";
     const hasImage = Boolean(body.image_base64);
+    const explicitNutrition = extractExplicitNutrition(prompt, body.follow_up_answers);
     const mealContext = {
       timestamp: body.timestamp ?? new Date().toISOString(),
       meal_context: body.meal_context ?? null,
       has_photo: hasImage,
       follow_up_answers: body.follow_up_answers ?? null,
+      explicit_nutrition_from_leo: explicitNutrition,
     };
 
     const textPrompt =
@@ -151,27 +164,40 @@ serve(async (req) => {
       confidence?: string;
       confidence_reason?: string;
       clarifying_questions?: string[];
+      response_options?: string[];
       visible_components?: string[];
       assumptions?: string;
       notes?: string;
     };
 
-    const questions = Array.isArray(analysis.clarifying_questions)
+    const rawQuestions = Array.isArray(analysis.clarifying_questions)
       ? analysis.clarifying_questions.filter((q) => typeof q === "string" && q.trim().length > 0).slice(0, 3)
       : [];
-    const action = analysis.action === "record_meal" && questions.length === 0
+    const questions = explicitNutrition.protein == null
+      ? rawQuestions
+      : rawQuestions.filter((q) => !/\bprotein\b|\bgrams?\b|\bg\b/i.test(q));
+    const action = shouldRecordMeal(analysis.action, questions, explicitNutrition)
       ? "record_meal"
       : "ask_follow_up";
+    const finalQuestions = action === "record_meal" ? [] : questions;
+    const responseOptions = action === "record_meal"
+      ? []
+      : cleanResponseOptions(analysis.response_options, finalQuestions[0]);
+    const calories = explicitNutrition.calories ?? analysis.calories ?? minimumCaloriesFromProtein(explicitNutrition.protein) ?? 0;
+    const protein = explicitNutrition.protein ?? analysis.protein ?? 0;
 
     return Response.json(
       {
         action,
         title: analysis.title ?? "Meal",
-        calories: Math.max(0, Math.round(analysis.calories ?? 0)),
-        protein: Math.max(0, Math.round(analysis.protein ?? 0)),
+        calories: Math.max(0, Math.round(calories)),
+        protein: Math.max(0, Math.round(protein)),
         confidence: analysis.confidence ?? "low",
-        confidence_reason: analysis.confidence_reason ?? "",
-        clarifying_questions: questions,
+        confidence_reason: explicitNutrition.protein != null || explicitNutrition.calories != null
+          ? appendConfidenceReason(analysis.confidence_reason ?? "", explicitNutrition)
+          : analysis.confidence_reason ?? "",
+        clarifying_questions: finalQuestions,
+        response_options: responseOptions,
         visible_components: analysis.visible_components ?? [],
         assumptions: analysis.assumptions ?? "",
         notes: analysis.notes ?? "",
@@ -183,6 +209,81 @@ serve(async (req) => {
     return Response.json({ error: String(error) }, { status: 500, headers: corsHeaders });
   }
 });
+
+type ExplicitNutrition = {
+  protein?: number;
+  calories?: number;
+};
+
+function extractExplicitNutrition(prompt: unknown, followUps: unknown): ExplicitNutrition {
+  const text = [
+    typeof prompt === "string" ? prompt : "",
+    ...(Array.isArray(followUps) ? followUps.filter((item) => typeof item === "string") : []),
+  ].join("\n");
+
+  return {
+    protein: firstNumber(text, [
+      /\b(\d+(?:\.\d+)?)\s*(?:g|grams?)\s+(?:of\s+)?protein\b/i,
+      /\bprotein\s*(?:is|was|at|about|around|=|:)?\s*(\d+(?:\.\d+)?)\s*(?:g|grams?)?\b/i,
+      /\b(\d+(?:\.\d+)?)\s*(?:g|grams?)\s*(?:total\s*)?(?:protein|prot)\b/i,
+    ]),
+    calories: firstNumber(text, [
+      /\b(\d+(?:\.\d+)?)\s*(?:kcal|cal|cals|calories)\b/i,
+      /\bcalories\s*(?:is|was|at|about|around|=|:)?\s*(\d+(?:\.\d+)?)\b/i,
+    ]),
+  };
+}
+
+function firstNumber(text: string, patterns: RegExp[]): number | undefined {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1]) continue;
+    const value = Number(match[1]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return undefined;
+}
+
+function shouldRecordMeal(action: unknown, questions: string[], explicitNutrition: ExplicitNutrition): boolean {
+  if (questions.length === 0 && action === "record_meal") return true;
+  if (explicitNutrition.protein != null || explicitNutrition.calories != null) return true;
+  return false;
+}
+
+function appendConfidenceReason(reason: string, explicitNutrition: ExplicitNutrition): string {
+  const trusted: string[] = [];
+  if (explicitNutrition.protein != null) trusted.push(`${Math.round(explicitNutrition.protein)}g protein supplied by Leo`);
+  if (explicitNutrition.calories != null) trusted.push(`${Math.round(explicitNutrition.calories)} calories supplied by Leo`);
+  const suffix = `Trusted ${trusted.join(" and ")}.`;
+  return reason.trim().length > 0 ? `${reason} ${suffix}` : suffix;
+}
+
+function minimumCaloriesFromProtein(protein: number | undefined): number | undefined {
+  return protein == null ? undefined : Math.round(protein * 4);
+}
+
+function cleanResponseOptions(raw: unknown, question: string | undefined): string[] {
+  const options = Array.isArray(raw)
+    ? raw.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean)
+    : [];
+  const unique = Array.from(new Set(options)).slice(0, 3);
+  if (unique.length === 3) return unique;
+  return fallbackResponseOptions(question);
+}
+
+function fallbackResponseOptions(question: string | undefined): string[] {
+  const q = question?.toLowerCase() ?? "";
+  if (q.includes("cup") || q.includes("drink") || q.includes("soda") || q.includes("beverage")) {
+    return ["The cup has regular soda in it", "The cup has diet soda in it", "The cup has water in it"];
+  }
+  if (q.includes("sauce") || q.includes("dressing") || q.includes("dressed")) {
+    return ["It has creamy dressing or sauce", "It has a light amount of dressing or sauce", "No dressing or sauce"];
+  }
+  if (q.includes("fried") || q.includes("oil") || q.includes("butter")) {
+    return ["It was fried or cooked with oil/butter", "It had a small amount of oil/butter", "No added oil or butter"];
+  }
+  return ["It was the higher-calorie option", "It was a moderate portion", "It was the lighter option"];
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

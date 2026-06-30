@@ -6,6 +6,7 @@ struct TodayView: View {
     @State private var appeared = false
     @State private var showsEditor = false
     @State private var editorSeed: DailyTask?
+    @State private var isEnergyExpanded = false
 
     private var completedCount: Int { appState.tasks.filter(\.isComplete).count }
     private var totalCount: Int { appState.tasks.count }
@@ -34,10 +35,12 @@ struct TodayView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 stagger(0) { topBar }
-                stagger(1) { insightCard }
-                stagger(2) { heroCard }
-                stagger(3) { taskSection }
-                stagger(4) { sickDayCard }
+                stagger(1) { energyCard }
+                stagger(2) { coachCard }
+                stagger(3) { goalCard }
+                stagger(4) { heroCard }
+                stagger(5) { taskSection }
+                stagger(6) { sickDayCard }
             }
             .padding(.horizontal)
             .padding(.top, 8)
@@ -108,6 +111,214 @@ struct TodayView: View {
         case 12..<17: return "Good afternoon"
         case 17..<22: return "Good evening"
         default: return "Good night"
+        }
+    }
+
+    // MARK: Today's Energy
+
+    private var energyCard: some View {
+        let energy = appState.todayEnergy
+        return Button {
+            Haptics.light()
+            withAnimation(.snappy(duration: 0.3)) {
+                isEnergyExpanded.toggle()
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Today's Energy")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(CoachTheme.Text.primary)
+                        Text("\(energy.score)% · \(energy.label)")
+                            .font(.system(size: 32, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .contentTransition(.numericText())
+                    }
+                    Spacer()
+                    ZStack {
+                        Circle()
+                            .stroke(Color.white.opacity(0.08), lineWidth: 8)
+                        Circle()
+                            .trim(from: 0, to: CGFloat(Double(energy.score) / 100))
+                            .stroke(CoachTheme.accent, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        Text("\(Int((energy.confidence * 100).rounded()))")
+                            .font(.caption.bold())
+                            .foregroundStyle(CoachTheme.Text.muted)
+                    }
+                    .frame(width: 58, height: 58)
+                    .accessibilityLabel("Confidence \(Int((energy.confidence * 100).rounded())) percent")
+                }
+
+                Text(energy.bestMove)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(CoachTheme.Text.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    driverRow("Main driver", energy.primaryDriver)
+                    if isEnergyExpanded {
+                        ForEach(energy.secondaryDrivers, id: \.self) { driver in
+                            driverRow("Signal", driver)
+                        }
+                        Text(energy.expandedExplanation)
+                            .font(.footnote)
+                            .foregroundStyle(CoachTheme.Text.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
+                    }
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassPanel(radius: CoachTheme.Radius.xl)
+        }
+        .buttonStyle(.pressable)
+        .accessibilityHint("Tap to expand today's energy drivers")
+    }
+
+    private func driverRow(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label.uppercased())
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(CoachTheme.accent)
+            Text(value)
+                .font(.footnote)
+                .foregroundStyle(CoachTheme.Text.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var coachCard: some View {
+        let coach = appState.dailyCoachSnapshot
+        return VStack(alignment: .leading, spacing: 15) {
+            HStack(alignment: .center, spacing: 12) {
+                Image("LoopMark")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 20)
+                    .padding(9)
+                    .background(Color.red.opacity(0.9), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Coach")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundStyle(CoachTheme.Text.primary)
+                    Text(coach.updateWindow.capitalized)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(CoachTheme.accent)
+                }
+                Spacer()
+                Text(coach.recommendationType.replacingOccurrences(of: "_", with: " ").capitalized)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 6)
+                    .background(CoachTheme.accent.opacity(0.25), in: Capsule())
+            }
+
+            Text(coach.coachRead)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(CoachTheme.Text.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(coach.evidence.prefix(3), id: \.self) { point in
+                    HStack(alignment: .top, spacing: 9) {
+                        Circle()
+                            .fill(CoachTheme.accent)
+                            .frame(width: 5, height: 5)
+                            .padding(.top, 7)
+                        Text(point)
+                            .font(.footnote)
+                            .foregroundStyle(CoachTheme.Text.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Best next move")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(CoachTheme.accent)
+                Text(coach.bestNextMove)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Label(coach.habitFocus, systemImage: "target")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(CoachTheme.Text.muted)
+                Spacer()
+                Text(coach.coachCue)
+                    .font(.caption)
+                    .foregroundStyle(CoachTheme.Text.faint)
+                    .multilineTextAlignment(.trailing)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassPanel(radius: CoachTheme.Radius.xl)
+    }
+
+    private var goalCard: some View {
+        let goal = appState.goalPlan
+        let progress = appState.goalProgress
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Cut Goal")
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(CoachTheme.Text.primary)
+                    Text("Target \(goal.endDate.formatted(.dateTime.month(.abbreviated).day())) · \(progress.daysRemaining)d left")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(CoachTheme.Text.muted)
+                }
+                Spacer()
+                Text(progress.paceStatus)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(goalStatusColor(progress.paceStatus))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(goalStatusColor(progress.paceStatus).opacity(0.15), in: Capsule())
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(progress.currentTrendWeight.map { $0.formatted(.number.precision(.fractionLength(1))) } ?? "--")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("lb trend")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(CoachTheme.Text.muted)
+                Spacer()
+                Text("Target \(goal.targetWeight.formatted(.number.precision(.fractionLength(1))))")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(CoachTheme.Text.faint)
+            }
+
+            targetBar(
+                title: "Active calories",
+                value: "\(progress.sevenDayActiveCaloriesAverage ?? appState.healthMetrics.activeEnergy)/\(goal.activeCalorieMin)-\(goal.activeCalorieMax)",
+                progress: Double(progress.sevenDayActiveCaloriesAverage ?? appState.healthMetrics.activeEnergy) / Double(max(goal.activeCalorieMax, 1)),
+                systemImage: "flame.fill"
+            )
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassPanel(radius: CoachTheme.Radius.lg)
+    }
+
+    private func goalStatusColor(_ status: String) -> Color {
+        switch status.lowercased() {
+        case "on track": return .green
+        case "watch": return CoachTheme.accent
+        case "behind": return CoachTheme.flame
+        default: return CoachTheme.Text.faint
         }
     }
 
@@ -289,54 +500,6 @@ struct TodayView: View {
         return 16 * 60
     }
 
-    // MARK: Insight
-
-    private var insightCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                Image("LoopMark")
-                    .renderingMode(.template)
-                    .resizable()
-                    .scaledToFit()
-                    .foregroundStyle(.white)
-                    .frame(width: 42, height: 24)
-                    .padding(10)
-                    .background(CoachTheme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(appState.weeklyReview.title)
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
-                    Text("Daily insight")
-                        .font(.caption)
-                        .foregroundStyle(CoachTheme.accent)
-                }
-                Spacer()
-            }
-
-            Text(appState.weeklyReview.summary)
-                .font(.subheadline)
-                .foregroundStyle(CoachTheme.Text.muted)
-                .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(appState.weeklyReview.suggestions, id: \.self) { suggestion in
-                    HStack(alignment: .top, spacing: 10) {
-                        Circle()
-                            .fill(CoachTheme.accent)
-                            .frame(width: 5, height: 5)
-                            .padding(.top, 7)
-                        Text(suggestion)
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.85))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassPanel(radius: CoachTheme.Radius.xl)
-    }
 }
 
 // MARK: - Task row with swipe-to-complete

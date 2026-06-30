@@ -114,7 +114,24 @@ struct CoachView: View {
             }
 
             ConversationDrawer(isOpen: $showsDrawer)
+
+            if let clarification = appState.mealClarification {
+                MealClarificationPanel(
+                    clarification: clarification,
+                    onSelect: { option in
+                        sendClarification(option)
+                    },
+                    onOther: {
+                        Haptics.light()
+                        appState.dismissMealClarification()
+                        isFocused = true
+                    }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(3)
+            }
         }
+        .animation(.snappy(duration: 0.28), value: appState.mealClarification?.id)
     }
 
     private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = true) {
@@ -317,6 +334,138 @@ struct CoachView: View {
             await appState.sendMealImageToHaiku(imageData: data, note: note)
             draft = ""
             isResponding = false
+        }
+    }
+
+    private func sendClarification(_ option: String) {
+        Haptics.success()
+        appState.dismissMealClarification()
+        isFocused = false
+        isResponding = true
+        generationStartedAt = Date()
+        Task {
+            await appState.sendCoachMessage(option)
+            isResponding = false
+        }
+    }
+}
+
+private struct MealClarificationPanel: View {
+    let clarification: MealClarification
+    let onSelect: (String) -> Void
+    let onOther: () -> Void
+    @State private var dragOffset: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(0.46)
+                    .ignoresSafeArea()
+                    .onTapGesture(perform: onOther)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.18))
+                        .frame(width: 42, height: 5)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 10)
+                        .contentShape(Rectangle())
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(clarification.question)
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .foregroundStyle(CoachTheme.Text.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    VStack(spacing: 10) {
+                        ForEach(Array(clarification.options.prefix(3).enumerated()), id: \.offset) { index, option in
+                            Button {
+                                onSelect(option)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Text("\(index + 1)")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(index == 2 ? .black : CoachTheme.Text.primary)
+                                        .frame(width: 28, height: 28)
+                                        .background(index == 2 ? CoachTheme.accent : Color.white.opacity(0.08), in: Circle())
+
+                                    Text(option)
+                                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(CoachTheme.Text.primary)
+                                        .multilineTextAlignment(.leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+
+                                    Spacer()
+                                }
+                                .padding(14)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous)
+                                        .stroke(index == 2 ? CoachTheme.accent.opacity(0.45) : CoachTheme.Stroke.hairline, lineWidth: 1)
+                                }
+                            }
+                            .buttonStyle(.pressable)
+                        }
+                    }
+
+                    Button {
+                        onOther()
+                    } label: {
+                        HStack {
+                            Image(systemName: "ellipsis.bubble")
+                            Text("Other")
+                            Spacer()
+                            Text("type my own")
+                                .font(.caption)
+                                .foregroundStyle(CoachTheme.Text.faint)
+                        }
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(CoachTheme.Text.muted)
+                        .padding(14)
+                        .frame(maxWidth: .infinity)
+                        .background(CoachTheme.Fill.soft, in: RoundedRectangle(cornerRadius: CoachTheme.Radius.md, style: .continuous))
+                    }
+                    .buttonStyle(.pressable)
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 18)
+                .frame(maxWidth: .infinity)
+                .frame(height: proxy.size.height * 0.7, alignment: .top)
+                .offset(y: max(0, dragOffset))
+                .gesture(
+                    DragGesture(minimumDistance: 8)
+                        .onChanged { value in
+                            dragOffset = max(0, value.translation.height)
+                        }
+                        .onEnded { value in
+                            let shouldDismiss = value.translation.height > 90 || value.predictedEndTranslation.height > 180
+                            if shouldDismiss {
+                                onOther()
+                            } else {
+                                withAnimation(.snappy(duration: 0.22)) {
+                                    dragOffset = 0
+                                }
+                            }
+                        }
+                )
+                .background {
+                    ZStack {
+                        Rectangle().fill(.ultraThinMaterial)
+                        Rectangle().fill(Color(red: 0.075, green: 0.075, blue: 0.08).opacity(0.88))
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .stroke(CoachTheme.Stroke.panel, lineWidth: 1)
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 8)
+                .shadow(color: .black.opacity(0.35), radius: 28, y: -8)
+            }
         }
     }
 }
